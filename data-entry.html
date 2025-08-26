@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Port Map • Data Entry</title>
+<style>
+  :root { --bg:#0b2530; --card:#122936; --ink:#e8f0f5; --muted:#9fb3c8; --accent:#40c4aa; }
+  html,body { margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif }
+  .wrap { max-width:980px; margin:40px auto; padding:0 16px }
+  h1 { font-size:22px; margin:0 0 12px }
+  p  { color:var(--muted); margin:0 0 18px }
+  .card { background:var(--card); border:1px solid #1d3c4d; border-radius:16px; padding:16px; box-shadow:0 10px 30px #0005 }
+  textarea { width:100%; min-height:360px; border:1px solid #2a4b5c; background:#0e222e; color:var(--ink);
+             border-radius:12px; padding:12px; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize:vertical }
+  .row { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px }
+  button { padding:10px 14px; border-radius:10px; border:1px solid #2a4b5c; background:#113346; color:var(--ink);
+           font-weight:700; cursor:pointer }
+  button.primary { background:var(--accent); color:#08231e; border-color:#159b84 }
+  button:active { transform: translateY(1px) }
+  .status { margin-top:10px; font-size:13px }
+  .ok { color:#4be0b7 } .err { color:#ff7f7f }
+  .tips { margin-top:14px; color:var(--muted); font-size:13px }
+  .examples { margin-top:10px; }
+  .examples code { background:#0e222e; padding:6px 8px; border-radius:8px; display:block; border:1px solid #2a4b5c; overflow:auto }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nhập dữ liệu bến/tàu </h1>
+  <p>Dán JSON vào ô dưới. Hỗ trợ 2 dạng:
+    <br>• <b>Blob API</b>: <code>{ success, data: "&lt;chuỗi JSON&gt;" }</code>
+    <br>• <b>Trực tiếp</b>: <code>{ BerthData:[], ShipData:[], JobData:[] }</code>
+  </p>
+
+  <div class="card">
+    <textarea id="ta" placeholder='Dán JSON tại đây...'></textarea>
+    <div class="row">
+      <button id="btnValidate">Validate</button>
+      <button id="btnSave" class="primary">Validate & Save</button>
+      <button id="btnSample">Paste Sample</button>
+      <button id="btnClear">Clear Storage</button>
+      <button id="btnOpen" class="primary">Open Viewer</button>
+    </div>
+    <div class="status" id="status">Chưa kiểm tra.</div>
+
+    <div class="tips">
+      Lưu vào <code>localStorage["portMapData"]</code>. Trang vẽ sẽ đọc từ đây.<br>
+      Sau này đổi sang gọi API thật, chỉ cần sửa hàm nạp dữ liệu ở trang vẽ.
+    </div>
+
+    <div class="examples">
+      <details>
+        <summary>Ví dụ blob API (có trường <code>data</code> là chuỗi JSON)</summary>
+        <code id="ex1"></code>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+const statusEl = document.getElementById('status');
+const ta = document.getElementById('ta');
+
+function parseInput(txt){
+  let root;
+  try { root = JSON.parse(txt); }
+  catch(e){ throw new Error('JSON không hợp lệ: ' + e.message); }
+
+  // Nếu có trường .data là chuỗi, parse tiếp
+  if (root && typeof root === 'object' && typeof root.data === 'string'){
+    try {
+      const inner = JSON.parse(root.data);
+      return inner;
+    } catch(e){
+      throw new Error('Trường "data" không phải chuỗi JSON hợp lệ: ' + e.message);
+    }
+  }
+
+  // Nếu đã là object đúng cấu trúc
+  if (root && (root.BerthData || root.ShipData || root.JobData)){
+    return root;
+  }
+
+  throw new Error('Không tìm thấy BerthData/ShipData/JobData. Hãy dán blob API hoặc object trực tiếp.');
+}
+
+function validate(txt){
+  const obj = parseInput(txt);
+  if (!Array.isArray(obj.BerthData) || !Array.isArray(obj.ShipData))
+    throw new Error('Thiếu BerthData hoặc ShipData (phải là mảng).');
+  return obj;
+}
+
+document.getElementById('btnValidate').onclick = ()=>{
+  try{
+    const obj = validate(ta.value.trim());
+    statusEl.innerHTML = '<span class="ok">OK</span>: ' + summary(obj);
+  }catch(e){
+    statusEl.innerHTML = '<span class="err">Lỗi</span>: ' + e.message;
+  }
+};
+
+document.getElementById('btnSave').onclick = ()=>{
+  try{
+    const obj = validate(ta.value.trim());
+    localStorage.setItem('portMapData', JSON.stringify(obj));
+    statusEl.innerHTML = '<span class="ok">Đã lưu</span> vào localStorage["portMapData"]. ' + summary(obj);
+  }catch(e){
+    statusEl.innerHTML = '<span class="err">Lỗi</span>: ' + e.message;
+  }
+};
+
+document.getElementById('btnOpen').onclick = ()=>{
+  window.location.href = 'port-map.html';
+};
+
+document.getElementById('btnClear').onclick = ()=>{
+  localStorage.removeItem('portMapData');
+  statusEl.innerHTML = 'Đã xoá localStorage["portMapData"].';
+};
+
+document.getElementById('btnSample').onclick = ()=>{
+  ta.value = sampleBlob();
+  statusEl.innerHTML = 'Đã dán ví dụ blob API. Bấm Validate & Save.';
+};
+
+function summary(obj){
+  const b = obj.BerthData?.length || 0;
+  const s = obj.ShipData?.length || 0;
+  const j = obj.JobData?.length || 0;
+  const totalUnits = (obj.BerthData||[]).reduce((mx,cur)=>Math.max(mx, +cur.PosTo||0), 0);
+  return `Berths=${b}, Ships=${s}, Jobs=${j}, TOTAL_UNITS≈${totalUnits}`;
+}
+
+function sampleBlob(){
+  const inner = {
+    "BerthData":[
+      {"BerthNo":"CAU1","BerthName":"Cầu 1","PosFrom":0.0,"PosTo":196.3},
+      {"BerthNo":"CAU2","BerthName":"Cầu 2","PosFrom":196.3,"PosTo":392.5},
+      {"BerthNo":"CAU3","BerthName":"Cầu 3","PosFrom":392.5,"PosTo":588.8},
+      {"BerthNo":"CAU4","BerthName":"Cầu 4","PosFrom":588.8,"PosTo":785.0},
+      {"BerthNo":"CAU5","BerthName":"Cầu 5","PosFrom":785.0,"PosTo":980.6}
+    ],
+    "ShipData":[
+      {"ShipName":"AAL MELBOURNE","ShipKey":"AALM20250107090309","BerthNo":"CAU1","FROM_POS":812.0,"TO_POS":1006.0,"Equipment":"QC07;QC08;QC09","ETA":"2025-01-07T09:02:48","ETD":"2025-02-09T09:03:00"},
+      {"ShipName":"BALTIMORE HIGHWAY","ShipKey":"BALH20250822090216","BerthNo":"CAU5","FROM_POS":1.0,"TO_POS":18001.0,"Equipment":"QC05;TK05;TK06","ETA":"2025-08-22T09:02:02","ETD":"2025-08-31T09:02:11"},
+      {"ShipName":"BIENDONG FREIGHTER","ShipKey":"BDFR20250801160008","BerthNo":"CAU2","FROM_POS":608.0,"TO_POS":7328.0,"Equipment":"QC06;QC07;QC08","ETA":"2025-08-01T15:59:49","ETD":"2025-08-10T16:00:05"}
+    ],
+    "JobData":[
+      {"ShipKey":"AALM20250107090309","JobStatus":"F","JobCount":"49","Status":"E"},
+      {"ShipKey":"AALM20250107090309","JobStatus":"W","JobCount":"25","Status":"E"},
+      {"ShipKey":"BALH20250822090216","JobStatus":"F","JobCount":"4","Status":"R"},
+      {"ShipKey":"BALH20250822090216","JobStatus":"F","JobCount":"2099","Status":"R"},
+      {"ShipKey":"BDFR20250801160008","JobStatus":"F","JobCount":"4","Status":"E"},
+      {"ShipKey":"BDFR20250801160008","JobStatus":"F","JobCount":"5","Status":"F"}
+    ]
+  };
+  const blob = { success:true, data: JSON.stringify(inner) };
+  const txt = JSON.stringify(blob, null, 2);
+  document.getElementById('ex1').textContent = txt;
+  return txt;
+}
+
+// preload example text (collapsed in details)
+document.getElementById('ex1').textContent = sampleBlob();
+</script>
+</body>
+</html>
