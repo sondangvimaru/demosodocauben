@@ -339,13 +339,53 @@ const seaClipRect=document.getElementById('seaClipRect');
 (function(){const left=SEA.x1+SEA_PAD,right=SEA.x2-SEA_PAD;seaClipRect.setAttribute('x',left);seaClipRect.setAttribute('y',SEA.y-SEA.height);seaClipRect.setAttribute('width',right-left);seaClipRect.setAttribute('height',SEA.height);})();
 
  
-function loadData(){
-  const raw=localStorage.getItem('portMapData'); const warn=document.getElementById('warn');
-  if(!raw){warn.style.display='block';throw new Error('Không có localStorage["portMapData"].');}
-  try{return JSON.parse(raw);}catch(e){warn.textContent='JSON lỗi trong localStorage.';warn.style.display='block';throw e;}
-}
+// function loadData(){
+//   const raw=localStorage.getItem('portMapData'); const warn=document.getElementById('warn');
+//   if(!raw){warn.style.display='block';throw new Error('Không có localStorage["portMapData"].');}
+//   try{return JSON.parse(raw);}catch(e){warn.textContent='JSON lỗi trong localStorage.';warn.style.display='block';throw e;}
+// }
+
+ async function loadData(){
+  const warn = document.getElementById('warn');
 
  
+  const raw = localStorage.getItem('portMapData');
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      console.error('JSON lỗi trong localStorage:', e);
+      warn.style.display = 'block';
+      warn.textContent = 'JSON lỗi trong localStorage. Sẽ thử file dữ liệu mặc định...';
+      
+    }
+  }
+
+ 
+  try {
+    const res = await fetch('port-map.data.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const obj = await res.json();
+
+ 
+    if (obj && typeof obj.data === 'string') {
+      return JSON.parse(obj.data);
+    }
+
+    // Nếu đã là object chuẩn
+    if (obj && (obj.BerthData || obj.ShipData || obj.JobData)) {
+      return obj;
+    }
+
+    throw new Error('File port-map.data.json không đúng cấu trúc.');
+  } catch (e) {
+    console.error('Không load được file fallback:', e);
+    warn.style.display = 'block';
+    warn.textContent = 'Không có dữ liệu (localStorage và file JSON đều lỗi).';
+    throw e;
+  }
+}
+
 function normalizeUnits(berths){return Math.max(...berths.map(b=>+b.PosTo||0));}
 function buildUnitToPx(totalUnits){const origin=SEA.x1+SEA_PAD,right=SEA.x2-SEA_PAD,usableW=right-origin,pxPerUnit=usableW/totalUnits;return{origin,rightBound:right,usableW,pxPerUnit,uToPx:u=>origin+u*pxPerUnit};}
 function getShipSpanUAbsolute(ship,totalUnits){let u1=+ship.PosFrom||0,u2=+ship.PosTo||0;if(!(u1>0&&u2>0)){const f=+ship.FROM_POS||0,t=+ship.TO_POS||0;if(f>0&&t>0){let k=1,mx=Math.max(f,t);if(mx>totalUnits*8&&mx<totalUnits*200)k=10;if(mx>=totalUnits*200)k=100;u1=f/k;u2=t/k;}}if(u2<u1)[u1,u2]=[u2,u1];u1=Math.max(0,Math.min(u1,totalUnits));u2=Math.max(0,Math.min(u2,totalUnits));return (u2-u1>1)?{u1,u2}:null;}
@@ -829,16 +869,38 @@ ty=(vh-currentHeight)/3;
  
   userInteracted = true;
 }
-(function boot(){
-  const raw=loadData();
-  const berths=(raw.BerthData||[]).slice().sort((a,b)=>(+a.PosFrom||0)-(+b.PosFrom||0));
-  const ships=raw.ShipData||[], jobs=raw.JobData||[];
-  const totalUnits=normalizeUnits(berths), uMap=buildUnitToPx(totalUnits);
-  drawBerths(berths,uMap);
-  drawShips(ships,berths,uMap,jobs);
-  buildJobsUI(ships,berths,jobs);
+// (function boot(){
+//   const raw=loadData();
+//   const berths=(raw.BerthData||[]).slice().sort((a,b)=>(+a.PosFrom||0)-(+b.PosFrom||0));
+//   const ships=raw.ShipData||[], jobs=raw.JobData||[];
+//   const totalUnits=normalizeUnits(berths), uMap=buildUnitToPx(totalUnits);
+//   drawBerths(berths,uMap);
+//   drawShips(ships,berths,uMap,jobs);
+//   buildJobsUI(ships,berths,jobs);
  
-  requestAnimationFrame(() => zoomHeightNow(1.2, 'map'));
+//   requestAnimationFrame(() => zoomHeightNow(1.2, 'map'));
+// })();
+(async function boot(){
+  try{
+    const raw = await loadData();
+
+    const berths = (raw.BerthData||[]).slice().sort((a,b)=>(+a.PosFrom||0)-(+b.PosFrom||0));
+    const ships  = raw.ShipData || [];
+    const jobs   = raw.JobData || [];
+
+    const totalUnits = normalizeUnits(berths);
+    const uMap = buildUnitToPx(totalUnits);
+
+    drawBerths(berths, uMap);
+    drawShips(ships, berths, uMap, jobs);
+    buildJobsUI(ships, berths, jobs);
+
+    // nếu bạn có auto-zoom ban đầu thì giữ lại:
+    requestAnimationFrame(()=> zoomHeightNow(1.2, 'map'));
+
+  }catch(e){
+    console.error('Boot failed:', e);
+  }
 })();
 window.addEventListener('DOMContentLoaded', () => {
  
