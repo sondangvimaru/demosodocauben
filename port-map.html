@@ -225,10 +225,10 @@
 </div>
   <div class="hud">
     <!-- <button class="btn" id="fit">Fit</button>
-    <button class="btn" id="cover">Cover</button>
+    <button class="btn" id="cover">Cover</button> -->
     <button class="btn" id="zoomIn">＋</button>
-    <button class="btn" id="zoomOut">－</button> -->
-    <a class="btn" href="data-entry.html">← Data Entry</a>
+    <button class="btn" id="zoomOut">－</button>
+    <!-- <a class="btn" href="data-entry.html">← Data Entry</a> -->
   </div>
   <button class="chev" id="toggleJobs" aria-label="Mở/đóng danh sách">❯</button>
   <div class="warn" id="warn" style="display:none">Chưa có dữ liệu. Hãy nhập ở “Data Entry”.</div>
@@ -321,8 +321,8 @@ svg.addEventListener('pointermove',e=>{if(!dragging||lockDrag)return;tx+=e.clien
 svg.addEventListener('wheel',e=>{e.preventDefault();userInteracted=true;zoomBy(e.deltaY>0?0.9:1.1)},{passive:false});
 // document.getElementById('fit').onclick=()=>{userInteracted=false;fitContain();};
 // document.getElementById('cover').onclick=()=>{userInteracted=false;fitCover();};
-// document.getElementById('zoomIn').onclick=()=>{userInteracted=true;zoomBy(1.15);};
-// document.getElementById('zoomOut').onclick=()=>{userInteracted=true;zoomBy(0.87);};
+document.getElementById('zoomIn').onclick=()=>{userInteracted=true;zoomBy(1.15);};
+document.getElementById('zoomOut').onclick=()=>{userInteracted=true;zoomBy(0.87);};
 // new ResizeObserver(()=>{if(!userInteracted)fitHeight();}).observe(stage);
 // fitHeight();
 new ResizeObserver(()=>{
