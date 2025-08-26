@@ -319,7 +319,7 @@ function zoomBy(f){const r=svg.getBoundingClientRect(),cx=r.width/2,cy=r.height/
 // svg.addEventListener('pointerdown',e=>{userInteracted=true;lockDrag=!!e.target.closest('.ship, .berth');if(lockDrag)return;dragging=true;lx=e.clientX;ly=e.clientY;svg.setPointerCapture(e.pointerId);});
 // svg.addEventListener('pointerup',()=>{dragging=false;lockDrag=false;});
 // svg.addEventListener('pointermove',e=>{if(!dragging||lockDrag)return;tx+=e.clientX-lx;ty+=e.clientY-ly;lx=e.clientX;ly=e.clientY;apply();});
-// svg.addEventListener('wheel',e=>{e.preventDefault();userInteracted=true;zoomBy(e.deltaY>0?0.9:1.1)},{passive:false});
+// svg.addEventListener('wheel',e=>{e.preven  tDefault();userInteracted=true;zoomBy(e.deltaY>0?0.9:1.1)},{passive:false});
 // document.getElementById('fit').onclick=()=>{userInteracted=false;fitContain();};
 // document.getElementById('cover').onclick=()=>{userInteracted=false;fitCover();};
 document.getElementById('zoomIn').onclick=()=>{userInteracted=true;zoomBy(1.15);};
@@ -328,146 +328,122 @@ document.getElementById('zoomOut').onclick=()=>{userInteracted=true;zoomBy(0.87)
 // fitHeight();
 // ==== Pinch zoom (2 ngón) cho mobile/tablet ====
 /* ===== Pan mượt + Quán tính (fling) + Pinch-zoom 2 ngón ===== */
-let dragging = false, lockDrag = false, userInteracted = false;
-let lx = 0, ly = 0, lt = 0;     // last pointer x,y,time
-let vx = 0, vy = 0;             // velocity (px/ms)
-let flingId = null;
-const DAMPING = 0.0016;         // ma sát (nhỏ hơn -> trôi lâu hơn)
-const MIN_SPEED = 0.02;         // ngưỡng dừng (px/ms)
-const MAX_FRAME = 32;           // clamp dt (ms) tránh spike
+ 
 
-function stopFling(){ if (flingId){ cancelAnimationFrame(flingId); flingId=null; } }
-function startFling(){
-  stopFling();
-  const t0 = performance.now();
-  function step(t){
-    const dt = Math.min(MAX_FRAME, t - (step.last||t0)); step.last = t;
-    const k = Math.exp(-DAMPING * dt);  // giảm tốc mượt
-    vx *= k; vy *= k;
-    tx += vx * dt; ty += vy * dt;
-    apply();
-    if (Math.hypot(vx,vy) > MIN_SPEED) flingId = requestAnimationFrame(step);
-    else flingId = null;
-  }
-  flingId = requestAnimationFrame(step);
-}
+/* ===== Pan 1 ngón: giống code cũ, nhưng robust hơn trên mobile ===== */
+let dragging=false, lockDrag=false, userInteracted=false;
+let lx=0, ly=0;
 
-/* --- Pinch zoom (Pointer Events) --- */
-const activePtrs = new Map();
-let isPinching = false;
-let pinchStartDist = 0, pinchStartScale = 1;
-let pinchAnchorSvg = {x:0, y:0};
-
-function ptrDistance(p1,p2){ const dx=p1.clientX-p2.clientX, dy=p1.clientY-p2.clientY; return Math.hypot(dx,dy); }
-function ptrMidpoint(p1,p2){ return { x:(p1.clientX+p2.clientX)/2, y:(p1.clientY+p2.clientY)/2 }; }
-
-function startPinch(){
-  if (activePtrs.size !== 2) return;
-  const [a,b] = [...activePtrs.values()];
-  pinchStartDist = ptrDistance(a,b);
-  pinchStartScale = scale;
-  const mid = ptrMidpoint(a,b);
-  pinchAnchorSvg = clientToSvgPoint(mid.x, mid.y);
-  isPinching = true;
-  userInteracted = true;
-}
-
-function updatePinch(){
-  if (!isPinching || activePtrs.size !== 2) return;
-  const [a,b] = [...activePtrs.values()];
-  const dist = ptrDistance(a,b);
-  if (dist <= 0) return;
-
-  const ns = Math.max(MIN, Math.min(MAX, pinchStartScale * (dist / pinchStartDist)));
-  const r = svg.getBoundingClientRect();
-  const mid = ptrMidpoint(a,b);
-  const midLocalX = mid.x - r.left;
-  const midLocalY = mid.y - r.top;
-
-  scale = ns;
-  tx = midLocalX - pinchAnchorSvg.x * scale;
-  ty = midLocalY - pinchAnchorSvg.y * scale;
+function onWinMove(e){
+  if(!dragging) return;
+  tx += (e.clientX - lx);
+  ty += (e.clientY - ly);
+  lx = e.clientX; ly = e.clientY;
   apply();
 }
+function onWinUp(){
+  dragging=false;
+  lockDrag=false;
+  window.removeEventListener('pointermove', onWinMove, {passive:false});
+  window.removeEventListener('pointerup', onWinUp, {passive:false});
+  window.removeEventListener('pointercancel', onWinUp, {passive:false});
+  window.removeEventListener('pointerleave', onWinUp, {passive:false});
+}
 
-/* --- Pointer handlers hợp nhất --- */
-svg.addEventListener('pointerdown', e=>{
-  userInteracted = true;
+svg.addEventListener('pointerdown', (e)=>{
+  // Đừng cho browser scroll/zoom trang
+  e.preventDefault();
+  userInteracted=true;
 
-  // ghi nhận pointer cho pinch
+  // Nếu bấm vào đối tượng tương tác thì không kéo map
+  lockDrag = !!e.target.closest('.ship, .berth, .crane, .hit');
+  if(lockDrag) return;
+
+  // Nếu đang có nhiều hơn 1 ngón → để phần pinch xử lý (phần dưới)
+  if (e.isPrimary === false) return;
+
+  dragging=true;
+  lx=e.clientX; ly=e.clientY;
+
+  // nghe move/up trên window để không bị “mất” khi trượt ra ngoài svg
+  window.addEventListener('pointermove', onWinMove, {passive:false});
+  window.addEventListener('pointerup', onWinUp, {passive:false});
+  window.addEventListener('pointercancel', onWinUp, {passive:false});
+  window.addEventListener('pointerleave', onWinUp, {passive:false});
+}, {passive:false});
+
+/* ===== Wheel zoom desktop (giữ nguyên tinh thần cũ) ===== */
+svg.addEventListener('wheel', (e)=>{
+  e.preventDefault();
+  userInteracted=true;
+
+  const r=svg.getBoundingClientRect();
+  const cx = r.left + r.width/2;
+  const cy = r.top  + r.height/2;
+  const p  = clientToSvgPoint(cx, cy);
+
+  const f  = (e.deltaY>0) ? 0.9 : 1.1;
+  const ns = Math.max(MIN, Math.min(MAX, scale*f));
+
+  tx = (cx - r.left) - p.x*ns;
+  ty = (cy - r.top ) - p.y*ns;
+  scale = ns;
+  apply();
+}, {passive:false});
+
+/* ===== Pinch-zoom 2 ngón (Pointer Events) ===== */
+const activePtrs=new Map();
+let pinching=false;
+let pinchStartDist=0, pinchStartScale=1, pinchAnchorSvg={x:0,y:0};
+
+function dist(a,b){const dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.hypot(dx,dy);}
+function mid(a,b){return {x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2};}
+
+svg.addEventListener('pointerdown', (e)=>{
+  // thu thập pointer cho pinch (không capture để tránh bug iOS)
   activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
-  svg.setPointerCapture(e.pointerId);
 
-  // nếu có đúng 2 ngón -> vào chế độ pinch, vô hiệu hoá kéo map
-  if (activePtrs.size === 2){
-    dragging = false;
-    startPinch();
-    return;
+  if(activePtrs.size===2){
+    const [a,b]=[...activePtrs.values()];
+    pinchStartDist  = dist(a,b);
+    pinchStartScale = scale;
+    const m=mid(a,b);
+    pinchAnchorSvg  = clientToSvgPoint(m.x, m.y);
+    pinching=true;
+    dragging=false; // tắt pan nếu đang pan
   }
-
-  // nếu chạm vào tàu/bến -> không kéo map (để click/hover hoạt động)
-  lockDrag = !!e.target.closest('.ship, .berth');
-  if (lockDrag) return;
-
-  stopFling();
-  dragging = true;
-  lx = e.clientX; ly = e.clientY; lt = e.timeStamp || performance.now();
-  vx = 0; vy = 0;
 }, {passive:true});
 
-svg.addEventListener('pointermove', e=>{
-  // cập nhật vị trí pointer cho pinch
-  if (activePtrs.has(e.pointerId)){
+svg.addEventListener('pointermove', (e)=>{
+  // cập nhật pointer list
+  if(activePtrs.has(e.pointerId)){
     activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
   }
-  // đang pinch -> chỉ xử lý pinch
-  if (isPinching){ updatePinch(); return; }
+  if(!pinching || activePtrs.size!==2) return;
 
-  // pan 1 ngón
-  if (!dragging || lockDrag) return;
-  const now = e.timeStamp || performance.now();
-  const dx = e.clientX - lx;
-  const dy = e.clientY - ly;
-  const dt = Math.max(1, now - lt);
+  const [a,b]=[...activePtrs.values()];
+  const d = dist(a,b);
+  if(d<=0) return;
 
-  tx += dx; ty += dy; apply();
+  const ns = Math.max(MIN, Math.min(MAX, pinchStartScale * (d/pinchStartDist)));
+  const r  = svg.getBoundingClientRect();
+  const m  = mid(a,b);
+  const mx = m.x - r.left, my = m.y - r.top;
 
-  // vận tốc dùng EMA để mượt
-  const wx = dx/dt, wy = dy/dt;
-  vx = vx*0.8 + wx*0.2;
-  vy = vy*0.8 + wy*0.2;
-
-  lx = e.clientX; ly = e.clientY; lt = now;
+  scale = ns;
+  tx = mx - pinchAnchorSvg.x * scale;
+  ty = my - pinchAnchorSvg.y * scale;
+  apply();
 }, {passive:true});
 
-function endPointer(e){
-  // kết thúc pinch nếu còn <2 ngón
+function endPtr(e){
   activePtrs.delete(e.pointerId);
-  try{ svg.releasePointerCapture(e.pointerId); }catch{}
-  if (activePtrs.size < 2) isPinching = false;
-
-  // kết thúc pan 1 ngón -> bắt đầu fling
-  if (dragging){
-    dragging = false;
-    if (!lockDrag){
-      const boost = (e.pointerType === 'touch') ? 1.3 : 1.0; // trôi hơn cho touch
-      vx *= boost; vy *= boost;
-      if (Math.hypot(vx,vy) > MIN_SPEED) startFling();
-    }
-  }
-  lockDrag = false;
+  if(activePtrs.size<2) pinching=false;
 }
-svg.addEventListener('pointerup', endPointer, {passive:true});
-svg.addEventListener('pointercancel', endPointer, {passive:true});
-svg.addEventListener('pointerout', endPointer, {passive:true});
-svg.addEventListener('pointerleave', endPointer, {passive:true});
-
-/* --- Wheel zoom desktop giữ nguyên --- */
-svg.addEventListener('wheel', e=>{
-  e.preventDefault();
-  userInteracted = true;
-  zoomBy(e.deltaY > 0 ? 0.9 : 1.1);
-}, {passive:false});
+svg.addEventListener('pointerup', endPtr, {passive:true});
+svg.addEventListener('pointercancel', endPtr, {passive:true});
+svg.addEventListener('pointerleave', endPtr, {passive:true});
+svg.addEventListener('pointerout', endPtr, {passive:true});
 
 // const activePtrs = new Map();
 // let isPinching = false;
