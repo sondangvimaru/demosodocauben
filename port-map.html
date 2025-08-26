@@ -315,11 +315,11 @@ function fitCover(){const vw=stage.clientWidth,vh=stage.clientHeight;scale=Math.
 function fitHeight(){const vw=stage.clientWidth,vh=stage.clientHeight;scale=vh/MAP.H;tx=(vw-MAP.W*scale)/2;ty=(vh-MAP.H*scale)/2;apply();}
 function clientToSvgPoint(x,y){const p=svg.createSVGPoint();p.x=x;p.y=y;return p.matrixTransform(svg.getScreenCTM().inverse());}
 function zoomBy(f){const r=svg.getBoundingClientRect(),cx=r.width/2,cy=r.height/2;const p=clientToSvgPoint(cx,cy);const ns=Math.max(MIN,Math.min(MAX,scale*f));tx=p.x-(p.x-tx)*(ns/scale);ty=p.y-(p.y-ty)*(ns/scale);scale=ns;apply();}
-let dragging=false,lx=0,ly=0,lockDrag=false,userInteracted=false;
-svg.addEventListener('pointerdown',e=>{userInteracted=true;lockDrag=!!e.target.closest('.ship, .berth');if(lockDrag)return;dragging=true;lx=e.clientX;ly=e.clientY;svg.setPointerCapture(e.pointerId);});
-svg.addEventListener('pointerup',()=>{dragging=false;lockDrag=false;});
-svg.addEventListener('pointermove',e=>{if(!dragging||lockDrag)return;tx+=e.clientX-lx;ty+=e.clientY-ly;lx=e.clientX;ly=e.clientY;apply();});
-svg.addEventListener('wheel',e=>{e.preventDefault();userInteracted=true;zoomBy(e.deltaY>0?0.9:1.1)},{passive:false});
+// let dragging=false,lx=0,ly=0,lockDrag=false,userInteracted=false;
+// svg.addEventListener('pointerdown',e=>{userInteracted=true;lockDrag=!!e.target.closest('.ship, .berth');if(lockDrag)return;dragging=true;lx=e.clientX;ly=e.clientY;svg.setPointerCapture(e.pointerId);});
+// svg.addEventListener('pointerup',()=>{dragging=false;lockDrag=false;});
+// svg.addEventListener('pointermove',e=>{if(!dragging||lockDrag)return;tx+=e.clientX-lx;ty+=e.clientY-ly;lx=e.clientX;ly=e.clientY;apply();});
+// svg.addEventListener('wheel',e=>{e.preventDefault();userInteracted=true;zoomBy(e.deltaY>0?0.9:1.1)},{passive:false});
 // document.getElementById('fit').onclick=()=>{userInteracted=false;fitContain();};
 // document.getElementById('cover').onclick=()=>{userInteracted=false;fitCover();};
 document.getElementById('zoomIn').onclick=()=>{userInteracted=true;zoomBy(1.15);};
@@ -327,84 +327,226 @@ document.getElementById('zoomOut').onclick=()=>{userInteracted=true;zoomBy(0.87)
 // new ResizeObserver(()=>{if(!userInteracted)fitHeight();}).observe(stage);
 // fitHeight();
 // ==== Pinch zoom (2 ngón) cho mobile/tablet ====
+/* ===== Pan mượt + Quán tính (fling) + Pinch-zoom 2 ngón ===== */
+let dragging = false, lockDrag = false, userInteracted = false;
+let lx = 0, ly = 0, lt = 0;     // last pointer x,y,time
+let vx = 0, vy = 0;             // velocity (px/ms)
+let flingId = null;
+const DAMPING = 0.0016;         // ma sát (nhỏ hơn -> trôi lâu hơn)
+const MIN_SPEED = 0.02;         // ngưỡng dừng (px/ms)
+const MAX_FRAME = 32;           // clamp dt (ms) tránh spike
+
+function stopFling(){ if (flingId){ cancelAnimationFrame(flingId); flingId=null; } }
+function startFling(){
+  stopFling();
+  const t0 = performance.now();
+  function step(t){
+    const dt = Math.min(MAX_FRAME, t - (step.last||t0)); step.last = t;
+    const k = Math.exp(-DAMPING * dt);  // giảm tốc mượt
+    vx *= k; vy *= k;
+    tx += vx * dt; ty += vy * dt;
+    apply();
+    if (Math.hypot(vx,vy) > MIN_SPEED) flingId = requestAnimationFrame(step);
+    else flingId = null;
+  }
+  flingId = requestAnimationFrame(step);
+}
+
+/* --- Pinch zoom (Pointer Events) --- */
 const activePtrs = new Map();
 let isPinching = false;
-let pinchStartDist = 0;
-let pinchStartScale = 1;
-let pinchAnchorSvg = {x:0, y:0};   // điểm neo trong tọa độ SVG (giữ cố định dưới ngón)
-let pinchStartTx = 0, pinchStartTy = 0;
+let pinchStartDist = 0, pinchStartScale = 1;
+let pinchAnchorSvg = {x:0, y:0};
 
-function ptrDistance(p1, p2){ const dx=p1.clientX-p2.clientX, dy=p1.clientY-p2.clientY; return Math.hypot(dx,dy); }
-function ptrMidpoint(p1, p2){ return { x:(p1.clientX+p2.clientX)/2, y:(p1.clientY+p2.clientY)/2 }; }
+function ptrDistance(p1,p2){ const dx=p1.clientX-p2.clientX, dy=p1.clientY-p2.clientY; return Math.hypot(dx,dy); }
+function ptrMidpoint(p1,p2){ return { x:(p1.clientX+p2.clientX)/2, y:(p1.clientY+p2.clientY)/2 }; }
 
 function startPinch(){
-  if(activePtrs.size !== 2) return;
+  if (activePtrs.size !== 2) return;
   const [a,b] = [...activePtrs.values()];
   pinchStartDist = ptrDistance(a,b);
   pinchStartScale = scale;
   const mid = ptrMidpoint(a,b);
-  // điểm neo trong world (SVG coords) từ midpoint hiện tại
   pinchAnchorSvg = clientToSvgPoint(mid.x, mid.y);
-  pinchStartTx = tx; pinchStartTy = ty;
   isPinching = true;
   userInteracted = true;
 }
 
 function updatePinch(){
-  if(!isPinching || activePtrs.size !== 2) return;
+  if (!isPinching || activePtrs.size !== 2) return;
   const [a,b] = [...activePtrs.values()];
   const dist = ptrDistance(a,b);
-  if(dist <= 0) return;
+  if (dist <= 0) return;
 
-  // scale mới theo tỉ lệ khoảng cách 2 ngón
   const ns = Math.max(MIN, Math.min(MAX, pinchStartScale * (dist / pinchStartDist)));
-
-  // đặt tx,ty để điểm neo (pinchAnchorSvg) nằm đúng dưới midpoint mới
-  const mid = ptrMidpoint(a,b);
   const r = svg.getBoundingClientRect();
+  const mid = ptrMidpoint(a,b);
   const midLocalX = mid.x - r.left;
   const midLocalY = mid.y - r.top;
 
   scale = ns;
   tx = midLocalX - pinchAnchorSvg.x * scale;
   ty = midLocalY - pinchAnchorSvg.y * scale;
-
   apply();
 }
 
-svg.addEventListener('pointerdown', (e)=>{
-  // đừng chặn drag khi bấm vào tàu/bến 1 ngón; pinch chỉ khi có 2 ngón
+/* --- Pointer handlers hợp nhất --- */
+svg.addEventListener('pointerdown', e=>{
+  userInteracted = true;
+
+  // ghi nhận pointer cho pinch
   activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
   svg.setPointerCapture(e.pointerId);
-  if(activePtrs.size === 2 && !isPinching){
-    // khi bắt đầu có 2 ngón → chuyển sang pinch, vô hiệu hoá drag tạm thời
+
+  // nếu có đúng 2 ngón -> vào chế độ pinch, vô hiệu hoá kéo map
+  if (activePtrs.size === 2){
     dragging = false;
     startPinch();
+    return;
   }
+
+  // nếu chạm vào tàu/bến -> không kéo map (để click/hover hoạt động)
+  lockDrag = !!e.target.closest('.ship, .berth');
+  if (lockDrag) return;
+
+  stopFling();
+  dragging = true;
+  lx = e.clientX; ly = e.clientY; lt = e.timeStamp || performance.now();
+  vx = 0; vy = 0;
 }, {passive:true});
 
-svg.addEventListener('pointermove', (e)=>{
-  if(activePtrs.has(e.pointerId)){
+svg.addEventListener('pointermove', e=>{
+  // cập nhật vị trí pointer cho pinch
+  if (activePtrs.has(e.pointerId)){
     activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
-    if(isPinching){
-      updatePinch();
-      return; // đang pinch thì không xử lý drag
-    }
   }
- 
+  // đang pinch -> chỉ xử lý pinch
+  if (isPinching){ updatePinch(); return; }
+
+  // pan 1 ngón
+  if (!dragging || lockDrag) return;
+  const now = e.timeStamp || performance.now();
+  const dx = e.clientX - lx;
+  const dy = e.clientY - ly;
+  const dt = Math.max(1, now - lt);
+
+  tx += dx; ty += dy; apply();
+
+  // vận tốc dùng EMA để mượt
+  const wx = dx/dt, wy = dy/dt;
+  vx = vx*0.8 + wx*0.2;
+  vy = vy*0.8 + wy*0.2;
+
+  lx = e.clientX; ly = e.clientY; lt = now;
 }, {passive:true});
 
 function endPointer(e){
+  // kết thúc pinch nếu còn <2 ngón
   activePtrs.delete(e.pointerId);
-  svg.releasePointerCapture(e.pointerId);
-  if(activePtrs.size < 2){
-    isPinching = false;
+  try{ svg.releasePointerCapture(e.pointerId); }catch{}
+  if (activePtrs.size < 2) isPinching = false;
+
+  // kết thúc pan 1 ngón -> bắt đầu fling
+  if (dragging){
+    dragging = false;
+    if (!lockDrag){
+      const boost = (e.pointerType === 'touch') ? 1.3 : 1.0; // trôi hơn cho touch
+      vx *= boost; vy *= boost;
+      if (Math.hypot(vx,vy) > MIN_SPEED) startFling();
+    }
   }
+  lockDrag = false;
 }
 svg.addEventListener('pointerup', endPointer, {passive:true});
 svg.addEventListener('pointercancel', endPointer, {passive:true});
 svg.addEventListener('pointerout', endPointer, {passive:true});
 svg.addEventListener('pointerleave', endPointer, {passive:true});
+
+/* --- Wheel zoom desktop giữ nguyên --- */
+svg.addEventListener('wheel', e=>{
+  e.preventDefault();
+  userInteracted = true;
+  zoomBy(e.deltaY > 0 ? 0.9 : 1.1);
+}, {passive:false});
+
+// const activePtrs = new Map();
+// let isPinching = false;
+// let pinchStartDist = 0;
+// let pinchStartScale = 1;
+// let pinchAnchorSvg = {x:0, y:0};   // điểm neo trong tọa độ SVG (giữ cố định dưới ngón)
+// let pinchStartTx = 0, pinchStartTy = 0;
+
+// function ptrDistance(p1, p2){ const dx=p1.clientX-p2.clientX, dy=p1.clientY-p2.clientY; return Math.hypot(dx,dy); }
+// function ptrMidpoint(p1, p2){ return { x:(p1.clientX+p2.clientX)/2, y:(p1.clientY+p2.clientY)/2 }; }
+
+// function startPinch(){
+//   if(activePtrs.size !== 2) return;
+//   const [a,b] = [...activePtrs.values()];
+//   pinchStartDist = ptrDistance(a,b);
+//   pinchStartScale = scale;
+//   const mid = ptrMidpoint(a,b);
+ 
+//   pinchAnchorSvg = clientToSvgPoint(mid.x, mid.y);
+//   pinchStartTx = tx; pinchStartTy = ty;
+//   isPinching = true;
+//   userInteracted = true;
+// }
+
+// function updatePinch(){
+//   if(!isPinching || activePtrs.size !== 2) return;
+//   const [a,b] = [...activePtrs.values()];
+//   const dist = ptrDistance(a,b);
+//   if(dist <= 0) return;
+
+//   // scale mới theo tỉ lệ khoảng cách 2 ngón
+//   const ns = Math.max(MIN, Math.min(MAX, pinchStartScale * (dist / pinchStartDist)));
+
+//   // đặt tx,ty để điểm neo (pinchAnchorSvg) nằm đúng dưới midpoint mới
+//   const mid = ptrMidpoint(a,b);
+//   const r = svg.getBoundingClientRect();
+//   const midLocalX = mid.x - r.left;
+//   const midLocalY = mid.y - r.top;
+
+//   scale = ns;
+//   tx = midLocalX - pinchAnchorSvg.x * scale;
+//   ty = midLocalY - pinchAnchorSvg.y * scale;
+
+//   apply();
+// }
+
+// svg.addEventListener('pointerdown', (e)=>{
+//   // đừng chặn drag khi bấm vào tàu/bến 1 ngón; pinch chỉ khi có 2 ngón
+//   activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
+//   svg.setPointerCapture(e.pointerId);
+//   if(activePtrs.size === 2 && !isPinching){
+//     // khi bắt đầu có 2 ngón → chuyển sang pinch, vô hiệu hoá drag tạm thời
+//     dragging = false;
+//     startPinch();
+//   }
+// }, {passive:true});
+
+// svg.addEventListener('pointermove', (e)=>{
+//   if(activePtrs.has(e.pointerId)){
+//     activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
+//     if(isPinching){
+//       updatePinch();
+//       return;  
+//     }
+//   }
+ 
+// }, {passive:true});
+
+// function endPointer(e){
+//   activePtrs.delete(e.pointerId);
+//   svg.releasePointerCapture(e.pointerId);
+//   if(activePtrs.size < 2){
+//     isPinching = false;
+//   }
+// }
+// svg.addEventListener('pointerup', endPointer, {passive:true});
+// svg.addEventListener('pointercancel', endPointer, {passive:true});
+// svg.addEventListener('pointerout', endPointer, {passive:true});
+// svg.addEventListener('pointerleave', endPointer, {passive:true});
 
 new ResizeObserver(()=>{
   if (!userInteracted) {
