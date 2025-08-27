@@ -331,119 +331,166 @@ document.getElementById('zoomOut').onclick=()=>{userInteracted=true;zoomBy(0.87)
  
 
 /* ===== Pan 1 ngón: giống code cũ, nhưng robust hơn trên mobile ===== */
-let dragging=false, lockDrag=false, userInteracted=false;
-let lx=0, ly=0;
+ const PAN_DAMPING = 0.0012;   // ma sát nhẹ hơn → trôi mượt
+const PAN_MIN_SPEED = 0.015;  // tốc độ ngưỡng dừng
+const FRAME_MAX = 32;         // clamp dt
 
-function onWinMove(e){
-  if(!dragging) return;
-  tx += (e.clientX - lx);
-  ty += (e.clientY - ly);
-  lx = e.clientX; ly = e.clientY;
-  apply();
-}
-function onWinUp(){
-  dragging=false;
-  lockDrag=false;
-  window.removeEventListener('pointermove', onWinMove, {passive:false});
-  window.removeEventListener('pointerup', onWinUp, {passive:false});
-  window.removeEventListener('pointercancel', onWinUp, {passive:false});
-  window.removeEventListener('pointerleave', onWinUp, {passive:false});
+/* ===== STATE ===== */
+let userInteracted=false;
+let dragging=false, lockDrag=false;
+let lastX=0, lastY=0;
+let vx=0, vy=0;
+let flingId=null;
+
+function stopFling(){ if(flingId){ cancelAnimationFrame(flingId); flingId=null; } }
+function startFling(){
+  stopFling();
+  const t0=performance.now();
+  function step(t){
+    const dt=Math.min(FRAME_MAX, t-(step.last||t0)); step.last=t;
+    const k=Math.exp(-PAN_DAMPING*dt);
+    vx*=k; vy*=k;
+    tx+=vx*dt; ty+=vy*dt;
+    apply();
+    if(Math.hypot(vx,vy)>PAN_MIN_SPEED) flingId=requestAnimationFrame(step);
+    else flingId=null;
+  }
+  flingId=requestAnimationFrame(step);
 }
 
-svg.addEventListener('pointerdown', (e)=>{
-  // Đừng cho browser scroll/zoom trang
+/* ===== rAF throttle cho pan ===== */
+let panQueued=false, panDX=0, panDY=0;
+function queuePan(dx,dy){
+  panDX+=dx; panDY+=dy;
+  if(panQueued) return;
+  panQueued=true;
+  requestAnimationFrame(()=>{
+    tx+=panDX; ty+=panDY;
+    apply();
+    // velocity EMA để fling
+    const dt=16; const wx=panDX/dt, wy=panDY/dt;
+    vx=vx*0.8+wx*0.2; vy=vy*0.8+wy*0.2;
+    panDX=0; panDY=0; panQueued=false;
+  });
+}
+
+/* ===== Pinch (incremental) đúng tâm chạm ===== */
+const pts=new Map();
+let pinching=false;
+let pinchPrevDist=0;
+let pinchAnchorWorld={x:0,y:0};
+
+function dist(a,b){const dx=a.clientX-b.clientX, dy=a.clientY-b.clientY; return Math.hypot(dx,dy);}
+function mid(a,b){return {x:(a.clientX+b.clientX)/2, y:(a.clientY+b.clientY)/2};}
+
+/* mỗi frame xử lý pinch một lần để mượt */
+let pinchQueued=false;
+function processPinch(){
+  if(pinchQueued || !pinching || pts.size!==2) return;
+  pinchQueued=true;
+  requestAnimationFrame(()=>{
+    pinchQueued=false;
+    const [a,b]=[...pts.values()];
+    const d=dist(a,b); if(d<=0) return;
+
+    const r=svg.getBoundingClientRect();
+    const m=mid(a,b);
+    const mx=m.x - r.left, my=m.y - r.top;
+
+    // scale gia tăng: dùng tỉ lệ với khoảng cách KHÔNG so với start mà so với previous
+    const desired = Math.max(MIN, Math.min(MAX, scale*(d/pinchPrevDist)));
+
+    // neo: dùng world point ngay tại midpoint HIỆN TẠI (trước khi đổi scale)
+    const world = clientToSvgPoint(m.x, m.y);
+
+    scale = desired;
+    tx = mx - world.x*scale;
+    ty = my - world.y*scale;
+    apply();
+
+    pinchPrevDist = d; // cập nhật mốc đo cho frame tiếp
+  });
+}
+
+/* ===== HANDLERS ===== */
+svg.addEventListener('pointerdown',(e)=>{
   e.preventDefault();
   userInteracted=true;
 
-  // Nếu bấm vào đối tượng tương tác thì không kéo map
+  // thêm pointer vào set (cho pinch)
+  pts.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
+
+  // nếu đang có đúng 2 ngón → vào pinch mode (không pan)
+  if(pts.size===2){
+    const [a,b]=[...pts.values()];
+    pinching=true;
+    dragging=false;
+    pinchPrevDist=dist(a,b);
+    const m=mid(a,b);
+    pinchAnchorWorld = clientToSvgPoint(m.x, m.y); // dùng khi cần, nhưng ta tính lại mỗi frame bằng world hiện tại
+    return;
+  }
+
+  // nếu chạm vào đối tượng tương tác thì không pan
   lockDrag = !!e.target.closest('.ship, .berth, .crane, .hit');
   if(lockDrag) return;
 
-  // Nếu đang có nhiều hơn 1 ngón → để phần pinch xử lý (phần dưới)
-  if (e.isPrimary === false) return;
-
+  // pan 1 ngón
+  stopFling();
   dragging=true;
-  lx=e.clientX; ly=e.clientY;
+  lastX=e.clientX; lastY=e.clientY;
+},{passive:false});
 
-  // nghe move/up trên window để không bị “mất” khi trượt ra ngoài svg
-  window.addEventListener('pointermove', onWinMove, {passive:false});
-  window.addEventListener('pointerup', onWinUp, {passive:false});
-  window.addEventListener('pointercancel', onWinUp, {passive:false});
-  window.addEventListener('pointerleave', onWinUp, {passive:false});
-}, {passive:false});
+svg.addEventListener('pointermove',(e)=>{
+  // cập nhật vị trí pointer cho pinch
+  if(pts.has(e.pointerId)){
+    pts.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
+  }
 
-/* ===== Wheel zoom desktop (giữ nguyên tinh thần cũ) ===== */
-svg.addEventListener('wheel', (e)=>{
+  if(pinching && pts.size===2){
+    processPinch();
+    return;
+  }
+
+  if(!dragging || lockDrag) return;
   e.preventDefault();
-  userInteracted=true;
-
-  const r=svg.getBoundingClientRect();
-  const cx = r.left + r.width/2;
-  const cy = r.top  + r.height/2;
-  const p  = clientToSvgPoint(cx, cy);
-
-  const f  = (e.deltaY>0) ? 0.9 : 1.1;
-  const ns = Math.max(MIN, Math.min(MAX, scale*f));
-
-  tx = (cx - r.left) - p.x*ns;
-  ty = (cy - r.top ) - p.y*ns;
-  scale = ns;
-  apply();
-}, {passive:false});
-
-/* ===== Pinch-zoom 2 ngón (Pointer Events) ===== */
-const activePtrs=new Map();
-let pinching=false;
-let pinchStartDist=0, pinchStartScale=1, pinchAnchorSvg={x:0,y:0};
-
-function dist(a,b){const dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.hypot(dx,dy);}
-function mid(a,b){return {x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2};}
-
-svg.addEventListener('pointerdown', (e)=>{
-  // thu thập pointer cho pinch (không capture để tránh bug iOS)
-  activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
-
-  if(activePtrs.size===2){
-    const [a,b]=[...activePtrs.values()];
-    pinchStartDist  = dist(a,b);
-    pinchStartScale = scale;
-    const m=mid(a,b);
-    pinchAnchorSvg  = clientToSvgPoint(m.x, m.y);
-    pinching=true;
-    dragging=false; // tắt pan nếu đang pan
-  }
-}, {passive:true});
-
-svg.addEventListener('pointermove', (e)=>{
-  // cập nhật pointer list
-  if(activePtrs.has(e.pointerId)){
-    activePtrs.set(e.pointerId, {pointerId:e.pointerId, clientX:e.clientX, clientY:e.clientY});
-  }
-  if(!pinching || activePtrs.size!==2) return;
-
-  const [a,b]=[...activePtrs.values()];
-  const d = dist(a,b);
-  if(d<=0) return;
-
-  const ns = Math.max(MIN, Math.min(MAX, pinchStartScale * (d/pinchStartDist)));
-  const r  = svg.getBoundingClientRect();
-  const m  = mid(a,b);
-  const mx = m.x - r.left, my = m.y - r.top;
-
-  scale = ns;
-  tx = mx - pinchAnchorSvg.x * scale;
-  ty = my - pinchAnchorSvg.y * scale;
-  apply();
-}, {passive:true});
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY;
+  queuePan(dx,dy);
+},{passive:false});
 
 function endPtr(e){
-  activePtrs.delete(e.pointerId);
-  if(activePtrs.size<2) pinching=false;
+  pts.delete(e.pointerId);
+  if(pinching && pts.size<2){ pinching=false; }
+  if(dragging){
+    dragging=false;
+    if(!lockDrag){
+      const boost=(e.pointerType==='touch')?1.25:1.0;
+      vx*=boost; vy*=boost;
+      if(Math.hypot(vx,vy)>PAN_MIN_SPEED) startFling();
+    }
+  }
+  lockDrag=false;
 }
 svg.addEventListener('pointerup', endPtr, {passive:true});
 svg.addEventListener('pointercancel', endPtr, {passive:true});
 svg.addEventListener('pointerleave', endPtr, {passive:true});
 svg.addEventListener('pointerout', endPtr, {passive:true});
+
+/* ===== Wheel zoom (desktop) ===== */
+svg.addEventListener('wheel',(e)=>{
+  e.preventDefault();
+  userInteracted=true;
+  const r=svg.getBoundingClientRect();
+  const cx=r.left+r.width/2, cy=r.top+r.height/2;
+  const world=clientToSvgPoint(cx,cy);
+  const f = e.deltaY>0?0.9:1.1;
+  const ns = Math.max(MIN, Math.min(MAX, scale*f));
+  tx = (cx - r.left) - world.x*ns;
+  ty = (cy - r.top ) - world.y*ns;
+  scale = ns;
+  apply();
+},{passive:false});
 
 // const activePtrs = new Map();
 // let isPinching = false;
