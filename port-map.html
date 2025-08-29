@@ -198,7 +198,7 @@
 /* ===== GLOBALS ===== */
 var MAP={W:3000,H:2000};
 var SEA={x1:80,x2:2920,y:720,height:360};
-var SEA_PAD=300,PAD_VIS=6,LANE_GAP_PX=10;
+var SEA_PAD=300,PAD_VIS=6,LANE_GAP_PX=20;
 var BEAM_VISUAL_SCALE=1.6,MIN_SHIP_HEIGHT=14;
 var SHIP_SPRITES=[{src:'assets/cargo-ship-2.png',w:419,h:94},{src:'assets/tau-tong-hop-1.png',w:419,h:94}];
 var CAN_HOVER=window.matchMedia && matchMedia('(hover:hover)').matches;
@@ -439,7 +439,7 @@ async function loadData(){
   }
 }
 
-/* ===== UNITS → PIXELS (0 ở PHẢI) ===== */
+
 function normalizeUnits(berths){
   var maxU=0; if(!berths) return maxU;
   for(var i=0;i<berths.length;i++){ var v=+berths[i].PosTo||0; if(v>maxU) maxU=v; }
@@ -461,7 +461,7 @@ function getShipSpanUAbsolute(ship,totalUnits){
   var u1=+ship.FROM_POS||0, u2=+ship.TO_POS||0;
   if(!(u1>0&&u2>0)){
     var f=+ship.FROM_POS||0, t=+ship.TO_POS||0;
-    if(f>0&&t>0){
+    if(f>0&&t>0){getJob
       var k=1, mx=Math.max(f,t);
       if(mx>totalUnits*8 && mx<totalUnits*200) k=10;
       if(mx>=totalUnits*200) k=100;
@@ -473,16 +473,27 @@ function getShipSpanUAbsolute(ship,totalUnits){
   u2=Math.max(0,Math.min(u2,totalUnits));
   return (u2-u1>1)?{u1:u1,u2:u2}:null;
 }
+function getJob (jobData, shipKey) {
+  if (jobData && Array.isArray(jobData)) {
+    for (var i = 0; i < jobData.length; i++) {
+      var j = jobData[i];  
+      if (j.ShipKey === shipKey) {
+        return j;  
+      }
+    }
+  }
+  return null;  
+}
 function progressFromJobs(jobData,shipKey){
   var total=0, done=0, i;
   if(jobData){
     for(i=0;i<jobData.length;i++){
       var j=jobData[i]; if(j.ShipKey!==shipKey) continue;
-      total+= (+j.JobCount||0);
-      if(j.Status==='F' || j.Status==='R') done+= (+j.JobCount||0);
+      total=j.PercentDone;
+     
     }
   }
-  return total?Math.round(100*done/total):0;
+  return total;
 }
 function berthNoToName(berths, berthNo){
   if(!berthNo) return '—';
@@ -491,6 +502,43 @@ function berthNoToName(berths, berthNo){
   return berthNo;
 }
  
+ function computeVerticalOffsets(items, minGapPx){
+  // items: [{ px:{x1,x2}, h, ... }] theo đúng thứ tự gốc
+  var order = items.map((it, idx) => ({it, idx}))
+                   .sort((a,b) => a.it.px.x1 - b.it.px.x1);
+
+  var active = []; // các tàu đã đặt, còn chồng ngang: {x1,x2,h,y}
+  var yOffsets = new Array(items.length).fill(0);
+
+  function overlaps(a1,a2,b1,b2,gap){
+    return !( (a2 <= b1 - gap) || (a1 >= b2 + gap) );
+  }
+
+  for (var t=0; t<order.length; t++){
+    var cur = order[t].it;
+    var idx = order[t].idx;
+
+    // bỏ các tàu đã đi ra khỏi vùng chồng (ở trái)
+    for (var k=active.length-1; k>=0; k--){
+      if (active[k].x2 < cur.px.x1 - minGapPx) active.splice(k,1);
+    }
+
+    // tính độ cao cần đẩy lên do các tàu đang chồng ngang
+    var baseY = 0;
+    for (var k=0; k<active.length; k++){
+      var a = active[k];
+      if (overlaps(cur.px.x1, cur.px.x2, a.x1, a.x2, minGapPx)){
+        baseY = Math.max(baseY, a.y + a.h + LANE_GAP_PX); // dùng LANE_GAP_PX sẵn có
+      }
+    }
+
+    yOffsets[idx] = baseY;
+    active.push({ x1:cur.px.x1, x2:cur.px.x2, h:cur.h, y:baseY });
+  }
+  return yOffsets;
+}
+
+
 function assignLanesNoOverlap(items, minGapPx) {
   if (minGapPx == null) minGapPx = 8;
 
@@ -546,7 +594,8 @@ function assignLanesNoOverlap(items, minGapPx) {
   }
   return { laneCount: lanes.length, laneHeights: laneHeights, laneOffsets: laneOffsets };
 }
-
+ // Giữ nguyên LANE_GAP_PX bạn đang dùng ở file (mặc định 10)
+ 
  
 var pop=document.getElementById('pop'), popTitle=document.getElementById('popTitle'), popBody=document.getElementById('popBody');
 function hidePopover(){ pop.classList.remove('show','above','below'); }
@@ -834,16 +883,44 @@ else {
 // }
 
 
-/* ===== SHIPS ===== */
-var shipsLayer=document.getElementById('layer-ships');
- function drawShips(ships, berths, uMap, jobData){
-  shipsLayer.innerHTML = '';
-  cranesLayer.innerHTML = ''; 
-  var seaBottomY = SEA.y;
-  var SEA_BOTTOM_CLEAR = 8  ;  
-  var SHIFT_X = -28;         
+function growSeaClipForLanes(lanes){
+ 
+  var seaClipRect = document.getElementById('seaClipRect');
+ 
+  var laneCount = lanes.laneHeights.length;
+  var stackH = 0;
+  if (laneCount){
+    stackH = (lanes.laneOffsets[laneCount-1] || 0) + (lanes.laneHeights[laneCount-1] || 0);
+  }
 
-   window.__CRANE_USED__ = [];
+ 
+  var TOP_PAD = 24;            
+  var BOTTOM_PAD = 8;          
+
+ 
+  var x = 0;
+  var w = MAP.W;
+ 
+  var y = SEA.y - stackH - TOP_PAD;
+  var h = (stackH + TOP_PAD + BOTTOM_PAD) + SEA.height;
+
+  seaClipRect.setAttribute('x', x);
+  seaClipRect.setAttribute('width',  w);
+  seaClipRect.setAttribute('y',      y);
+  seaClipRect.setAttribute('height', h);
+}
+
+var shipsLayer=document.getElementById('layer-ships');
+function drawShips(ships, berths, uMap, jobData){
+  shipsLayer.innerHTML = '';
+  cranesLayer.innerHTML = '';
+
+  var seaBottomY = SEA.y;
+  var SEA_BOTTOM_CLEAR = 8;
+  var SHIFT_X = -28;
+
+ 
+  window.__CRANE_USED__ = [];
 
   var BMIN = Math.min(uMap.origin, uMap.rightBound);
   var BMAX = Math.max(uMap.origin, uMap.rightBound);
@@ -857,8 +934,7 @@ var shipsLayer=document.getElementById('layer-ships');
     seen[s.ShipKey] = 1;
     uniq.push(s);
   }
-
-  // build items từ span tuyệt đối (KHÔNG cắt PAD_VIS)
+ 
   var totalU = uMap.usableW / uMap.pxPerUnit;
   var items = [];
   for (var k=0;k<uniq.length;k++){
@@ -866,19 +942,21 @@ var shipsLayer=document.getElementById('layer-ships');
     var spanAbs = getShipSpanUAbsolute(ship, totalU);
     if (!spanAbs) continue;
 
-    // u -> px (0 ở bên PHẢI)
+   
     var p1 = uMap.uToPx(spanAbs.u1);
     var p2 = uMap.uToPx(spanAbs.u2);
     var x1 = Math.min(p1, p2);
     var x2 = Math.max(p1, p2);
 
-    // Clamp theo biên bản đồ
+ 
     var vx1 = Math.max(BMIN + EDGE_PAD, x1);
     var vx2 = Math.min(BMAX - EDGE_PAD, x2);
-    if (vx2 <= vx1) vx2 = vx1 + 2;  
-    var w = vx2 - vx1;             
+    if (vx2 <= vx1) vx2 = vx1 + 2;
+
+    var w = vx2 - vx1;                 
     var ppm = uMap.pxPerUnit;
 
+ 
     var loaM = w / ppm;
     var estBeamM = (ship.BeamM && +ship.BeamM>0) ? (+ship.BeamM) : (loaM * 0.12);
     var h = Math.max(MIN_SHIP_HEIGHT, estBeamM * ppm * BEAM_VISUAL_SCALE);
@@ -887,19 +965,22 @@ var shipsLayer=document.getElementById('layer-ships');
   }
   if (!items.length) return;
 
-
+ 
   var lanes = assignLanesNoOverlap(items, 8);
 
- 
+  
+  if (typeof growSeaClipForLanes === 'function') growSeaClipForLanes(lanes);
+
+
   for (var i=0;i<items.length;i++){
     var it = items[i], w = it.w, h = it.h;
 
-    
-    
-    drawCranesForShip(it);  
+     drawCranesForShip(it);
+
     var cx = (it.px.x1 + it.px.x2) / 2;
     var baseY = seaBottomY - SEA_BOTTOM_CLEAR - (lanes.laneOffsets[it.lane] || 0);
-
+    // var baseY = seaBottomY - SEA_BOTTOM_CLEAR - (lanes.laneOffsets[i] || 0);
+    // nhóm cha của 1 tàu
     var g = svgEl('g', {
       'class':'ship',
       transform: 'translate(' + cx + ',' + baseY + ')',
@@ -907,57 +988,70 @@ var shipsLayer=document.getElementById('layer-ships');
     });
     shipsLayer.appendChild(g);
 
- 
+    var faceScaleX = (String(it.ship.ALongSide||'P').toUpperCase() === 'P') ? 1 : -1;
+
+    // biên trái/phải ảnh (trong hệ cục bộ, sau dịch SHIFT_X)
     var visLeft  = -w/2 + SHIFT_X;
     var visRight =  w/2 + SHIFT_X;
 
-   
+    // 1) HULL: chỉ chứa ảnh, áp transform lật
+    var gHull = svgEl('g', { transform: 'scale('+faceScaleX+',1)' });
+    g.appendChild(gHull);
+
+ 
+    var imgX = (faceScaleX === 1) ? visLeft : (-visRight);
+
     var spr = (it.ship.IsROROVessel) ? SHIP_SPRITES[1] : SHIP_SPRITES[0];
-    g.appendChild(svgEl('image', {
+    gHull.appendChild(svgEl('image', {
       href: spr.src,
-      x: visLeft, y: -h,
+      x: imgX, y: -h,
       width: w, height: h,
-      preserveAspectRatio: 'none'    
+      preserveAspectRatio: 'none'
     }));
 
-    
+ 
+    var gUI = svgEl('g', {});
+    g.appendChild(gUI);
+
     var prog = progressFromJobs(jobData, it.ship.ShipKey);
 
     var trackW = Math.max(8, Math.min(14, Math.floor(h * 0.22)));
     var trackH = Math.max(14, Math.min(Math.floor(h - 4), Math.floor(h * 0.96)));
     var trackY = -h + 2;
- 
+
     var INSET_RIGHT = Math.max(6, Math.min(24, Math.floor(Math.min(h, w) * 0.20)));
     var EXTRA_STERN_SHIFT = (w >= 220 ? 10 : 0);
-    var MARGIN_RIGHT = -10;
-
-    var maxRightInside = visRight - MARGIN_RIGHT;         
-    var trackX = maxRightInside - INSET_RIGHT - trackW - EXTRA_STERN_SHIFT;
+    var EDGE_MARGIN = 10;
 
  
-    var minLeftInside = visLeft + 2;
-    if (trackX < minLeftInside) trackX = minLeftInside;
+    var sternX = (faceScaleX === 1) ? (visRight - EDGE_MARGIN) : (visLeft + EDGE_MARGIN);
 
+ 
+    var trackX = (faceScaleX === 1)
+      ? (sternX - INSET_RIGHT - trackW - EXTRA_STERN_SHIFT)    
+      : (sternX + INSET_RIGHT + EXTRA_STERN_SHIFT);           
+
+ 
+    var minInside = visLeft + 2;
+    var maxInside = visRight - 2;
+    if (trackX < minInside) trackX = minInside;
+    if (trackX + trackW > maxInside) trackX = maxInside - trackW;
+
+ 
     var fillH = Math.round(trackH * (prog / 100));
     var fillY = trackY + (trackH - fillH);
 
-    g.appendChild(svgEl('rect', { x:trackX, y:trackY, width:trackW, height:trackH, rx:trackW/2, fill:'#e9ecef' }));
-    g.appendChild(svgEl('rect', { x:trackX, y:fillY, width:trackW, height:fillH, rx:trackW/2, fill:'#34c759' }));
+    gUI.appendChild(svgEl('rect', { x:trackX, y:trackY, width:trackW, height:trackH, rx:trackW/2, fill:'#e9ecef' }));
+    gUI.appendChild(svgEl('rect', { x:trackX, y:fillY,  width:trackW, height:fillH,  rx:trackW/2, fill:'#34c759' }));
 
  
     var fontSize = Math.max(10, Math.min(16, Math.floor(h * 0.34)));
-    var tyMid = trackY + trackH/2 + Math.floor(fontSize/3);
-    var GAP_TX = Math.max(4, Math.min(10, Math.floor(h * 0.12)));
-    var txRight = trackX + trackW + GAP_TX+10;
-    var maxInside = visRight - 2;
-    if (txRight > maxInside) txRight = maxInside;
-
-    g.appendChild(svgEl('text', {
-      x: trackX-5, y: trackY-5, 'font-size': fontSize, 'font-weight': '700',
+    gUI.appendChild(svgEl('text', {
+      x: trackX, y: trackY-5, 'font-size': fontSize, 'font-weight': '700',
       fill:'#1d3f77', 'text-anchor':'start'
     }, String(prog) + '%'));
 
-    // Hitbox (trùm đúng ảnh đã dời)
+ 
     var hitPad = 8;
     var hit = svgEl('rect', {
       'class':'hit',
@@ -967,235 +1061,542 @@ var shipsLayer=document.getElementById('layer-ships');
       height: h + hitPad*2,
       fill:'#000', 'fill-opacity':'0.001'
     });
-    g.appendChild(hit);
-
+    gUI.appendChild(hit);
  
     var berthNameFromData = berthNoToName(berths, it.ship.BerthNo);
     var ppm2 = uMap.pxPerUnit;
-    // var meta = {
-    //   shipName: it.ship.ShipName,
-    //   shipKey:  it.ship.ShipKey,
-    //   berthName: berthNameFromData,
-    //   uRange: it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1),
-    //   uSpan:  it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1)+' (pxPerUnit='+ppm2.toFixed(3)+')',
-    //   size:   '~'+(w/ppm2).toFixed(1)+' m × '+(h/(ppm2*BEAM_VISUAL_SCALE)).toFixed(1)+' m (ước tính)',
-    //   progress: prog,
-    //   eta: it.ship.ETA || '—',
-    //   etd: it.ship.ETD || it.ship.Etd || '—',
-    //   equipment: it.ship.Equipment || '',
-    //   oprId: it.ship.OprId || it.ship.oprId || '—',
-    //   pxPerUnit: ppm2.toFixed(3)
-    // };
- // --- thời gian từ API (nếu chưa có thì '—')
-var berthDate = it.ship.BerthDate || null;
-var atw       = it.ship.ATW       || null;
-var etc       = it.ship.ETC       || null;
+
+    var berthDate = it.ship.BerthDate || null;
+    var atw       = it.ship.ATW       || null;
+    var etc       = it.ship.ETC       || null;
+    var etw       = it.ship.ETW       || null;
+
+    var equipStr  = (it.ship.Equipment || '').trim();
+    var equipList = equipStr ? equipStr.split(';').filter(function(x){ return x && x!=='*'; }) : [];
+    var gangCount = null;
+
+    var jobship   = getJob(jobData, it.ship.ShipKey);
+    var JobDoing  = jobship ? (jobship.JobDoing||0) : 0;
+    var totalJob  = jobship ? (jobship.TotalJob||0) : 0;
+    var doneJob   = JobDoing ? (totalJob-JobDoing) : 0;
+
+    var teus = jobship!= null ? jobship.TotalTeu : null;
+    var productivity = (jobship!= null ? jobship.PercentDone : null);
+
+    var Discharge_TotalJob = jobship!= null ? jobship.Discharge_TotalJob : null;
+    var Discharge_JobDoing = jobship!= null ? jobship.Discharge_JobDoing : null;
+    var Discharge_DoneJob  = (Discharge_TotalJob!=null && Discharge_JobDoing!=null) ? (Discharge_TotalJob-Discharge_JobDoing) : null;
+
+    var Loading_TotalJob   = jobship!= null ? jobship.Loading_TotalJob : null;
+    var Loading_JobDoing   = jobship!= null ? jobship.Loading_JobDoing : null;
+    var Loading_DoneJob    = (Loading_TotalJob!=null && Loading_JobDoing!=null) ? (Loading_TotalJob-Loading_JobDoing) : null;
+
+    var Shifting_TotalJob  = jobship!= null ? jobship.Shifting_TotalJob : null;
+    var Shifting_JobDoing  = jobship!= null ? jobship.Shifting_JobDoing : null;
+    var Shifting_Done      = (Shifting_TotalJob!=null && Shifting_JobDoing!=null) ? (Shifting_TotalJob-Shifting_JobDoing) : null;
+
+    function buildVoyCode(s){
+      var a = (s.ShipID||'').toString().trim();
+      var b = (s.ShipYear||'').toString().trim();
+      var c = (s.ShipVoy||'').toString().trim();
+      var out = [a,b,c].filter(Boolean).join('-');
+      return out || (s.ImVoy || s.ExVoy || '—');
+    }
+    var voyCode = buildVoyCode(it.ship);
+
+    var meta = {
+      shipName: it.ship.ShipName,
+      berthName: berthNameFromData,
+      progress: prog,
+      uRange: it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1),
+      uSpan:  it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1)+' (pxPerUnit='+ppm2.toFixed(3)+')',
+      size:   '~'+(w/ppm2).toFixed(1)+' m × '+(h/(ppm2*BEAM_VISUAL_SCALE)).toFixed(1)+' m (ước tính)',
+      pxPerUnit: ppm2.toFixed(3),
+      oprId: it.ship.OprId || it.ship.oprId || '—',
+      equipment: it.ship.Equipment || '',
+      gangCount: (gangCount==null ? '—' : gangCount),
+      teus: (teus==null ? '—' : teus),
+      productivity: (productivity==null ? '—' : productivity),
+      doneJob : doneJob||0,
+      JobDoing: JobDoing||0,
+      totalJob: totalJob||0,
+      Shifting_TotalJob: Shifting_TotalJob||0,
+      Shifting_JobDoing: Shifting_JobDoing||0,
+      Shifting_Done: Shifting_Done||0,
+      Discharge_TotalJob: Discharge_TotalJob||0,
+      Discharge_JobDoing: Discharge_JobDoing||0,
+      Discharge_DoneJob: Discharge_DoneJob||0,
+      Loading_TotalJob: Loading_TotalJob||0,
+      Loading_JobDoing: Loading_JobDoing||0,
+      Loading_DoneJob: Loading_DoneJob||0,
+      berthDate: berthDate || '—',
+      atw:       atw       || '—',
+      etc:       etc       || '—',
+      etw:       etw || '-',
+      voyCode:   voyCode
+    };
 
  
-var equipStr  = (it.ship.Equipment || '').trim();
-var equipList = equipStr ? equipStr.split(';').filter(function(x){ return x && x!=='*'; }) : [];
-var gangCount =    null;
+    (function(meta, g, hit){
+      function summarizeJobs(jobData, shipKey){
+        var rows = { nhap:{total:0, done:0}, xuat:{total:0, done:0}, dao:{total:0, done:0} };
+        for (var i=0;i<(jobData||[]).length;i++){
+          var j = jobData[i]; if (j.ShipKey !== it.ship.ShipKey) continue;
+          var cnt = (+j.JobCount)||0;
+          var done = (j.Status==='F' || j.Status==='R') ? cnt : 0;
+          var mode = (j.JobMode||'').toUpperCase();
+          var name = (j.JobModeName||'').toLowerCase();
+          if (mode==='NTAU' || name.indexOf('nhập')>=0){ rows.nhap.total+=cnt; rows.nhap.done+=done; }
+          else if (mode==='XTAU' || name.indexOf('xuất')>=0){ rows.xuat.total+=cnt; rows.xuat.done+=done; }
+          else if (name.indexOf('đảo')>=0 || name.indexOf('dao')>=0){ rows.dao.total+=cnt; rows.dao.done+=done; }
+        }
+        rows.nhap.left = Math.max(0, rows.nhap.total - rows.nhap.done);
+        rows.xuat.left = Math.max(0, rows.xuat.total - rows.xuat.done);
+        rows.dao.left  = Math.max(0, rows.dao.total  - rows.dao.done);
+        var total = rows.nhap.total + rows.xuat.total + rows.dao.total;
+        var done  = rows.nhap.done  + rows.xuat.done  + rows.dao.done;
+        return {rows:rows, total:total, done:done, left:Math.max(0,total-done)};
+      }
 
- 
-var teus         = (it.ship.TEUS != null ? it.ship.TEUS : (it.ship.TotalTEUS != null ? it.ship.TotalTEUS : null));
-var productivity = (it.ship.Productivity != null ? it.ship.Productivity : null);
+      function esc(s){ return (s==null?'—':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
- 
-function buildVoyCode(s){
-  var a = (s.ShipID||'').toString().trim();
-  var b = (s.ShipYear||'').toString().trim();
-  var c = (s.ShipVoy||'').toString().trim();
-  var out = [a,b,c].filter(Boolean).join('-');
-  return out || (s.ImVoy || s.ExVoy || '—');
+      function showPopoverShip(){
+        var agg = summarizeJobs(window.__JOB_DATA__ || jobData, it.ship.ShipKey);
+        popTitle.textContent = meta.shipName || 'Tàu';
+        var wktitle=(meta.atw!="—")?"Bắt đầu làm hàng":"Dự kiến làm hàng";
+        var wkvl=(meta.atw!="—")?esc(fmtDate(meta.atw)):esc(fmtDate(meta.etw));
+
+        popBody.innerHTML =
+          "<div style='max-width:384px'>"+
+            "<table style='width:100%;border-collapse:collapse'><tbody>"+
+              "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Hãng tàu: <strong style='color:#0b66c3'>"+esc(meta.oprId)+"</strong></td>"+
+                  "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Số máng: <strong style='color:#0b66c3'>"+esc(meta.gangCount)+"</strong></td></tr>"+
+              "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng TEUS: <strong style='color:#0b66c3'>"+esc(meta.teus)+"</strong></td>"+
+                  "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Năng suất: <strong style='color:#0b66c3'>"+esc(meta.productivity)+"</strong></td></tr>"+
+            "</tbody></table>"+
+            "<div style='height:4px;background:#00468A;margin:0 0 8px 0'></div>"+
+            "<table style='width:100%;border-collapse:collapse'>"+
+              "<tr><th style='text-align:left;font:600 12px system-ui;color:#223;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>Thời gian cập cầu</th>"+
+                  "<th style='text-align:right;font:800 12px system-ui;color:#f39c12;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>"+esc(fmtDate(meta.berthDate))+"</th></tr>"+
+              "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>"+wktitle+"</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+wkvl+"</td></tr>"+
+              "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>Dự kiến xong</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+esc(fmtDate(meta.etc))+"</td></tr>"+
+            "</table>"+
+            "<div style='height:4px;background:#00468A;margin:8px 0'></div>"+
+            "<table style='width:100%;border-collapse:collapse'>"+
+              "<tr><th style='font-weight:400;border:1px solid #e5e9ef;padding:6px 8px;text-align:left'>"+esc(meta.voyCode)+"</th>"+
+                  "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Container</th>"+
+                  "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Đã thực hiện</th>"+
+                  "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Còn lại</th></tr>"+
+              "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Nhập</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_JobDoing+"</td></tr>"+
+              "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Xuất</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_TotalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_JobDoing+"</td></tr>"+
+              "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Đảo chuyển</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_TotalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_Done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_JobDoing+"</td></tr>"+
+              "<tr style='background:#FFF9E2'><td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.totalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.doneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.JobDoing+"</td></tr>"+
+            "</table>"+
+          "</div>";
+
+        showPopoverForSvgAnchor(g,'above');
+      }
+
+      window.__JOB_DATA__ = jobData;
+      hit.addEventListener('pointerup', function(e){ e.stopPropagation(); showPopoverShip(); }, {passive:true});
+      if (CAN_HOVER){
+        var hideT=null;
+        g.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); showPopoverShip(); });
+        g.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+        pop.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); });
+        pop.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+      }
+    })(meta, g, hit);
+   
+  }
 }
-var voyCode = buildVoyCode(it.ship);
+
+
+//  function drawShips(ships, berths, uMap, jobData){
+//   shipsLayer.innerHTML = '';
+//   cranesLayer.innerHTML = ''; 
+//   var seaBottomY = SEA.y;
+//   var SEA_BOTTOM_CLEAR = 8  ;  
+//   var SHIFT_X = -28;         
+
+//    window.__CRANE_USED__ = [];
+
+//   var BMIN = Math.min(uMap.origin, uMap.rightBound);
+//   var BMAX = Math.max(uMap.origin, uMap.rightBound);
+//   var EDGE_PAD = 0;
 
  
-var meta = {
-  shipName: it.ship.ShipName,
-  berthName: berthNameFromData,
-  progress: prog,
-  uRange: it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1),
-  uSpan:  it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1)+' (pxPerUnit='+ppm2.toFixed(3)+')',
-  size:   '~'+(w/ppm2).toFixed(1)+' m × '+(h/(ppm2*BEAM_VISUAL_SCALE)).toFixed(1)+' m (ước tính)',
-  pxPerUnit: ppm2.toFixed(3),
-  oprId: it.ship.OprId || it.ship.oprId || '—',
-  equipment: it.ship.Equipment || '',
+//   var seen = {}, uniq = [];
+//   for (var i=0;i<(ships||[]).length;i++){
+//     var s = ships[i];
+//     if (seen[s.ShipKey]) continue;
+//     seen[s.ShipKey] = 1;
+//     uniq.push(s);
+//   }
 
-  gangCount: (gangCount==null ? '—' : gangCount),
-  teus: (teus==null ? '—' : teus),
-  productivity: (productivity==null ? '—' : productivity),
+//   // build items từ span tuyệt đối (KHÔNG cắt PAD_VIS)
+//   var totalU = uMap.usableW / uMap.pxPerUnit;
+//   var items = [];
+//   for (var k=0;k<uniq.length;k++){
+//     var ship = uniq[k];
+//     var spanAbs = getShipSpanUAbsolute(ship, totalU);
+//     if (!spanAbs) continue;
 
-  berthDate: berthDate || '—',
-  atw:       atw       || '—',
-  etc:       etc       || '—',
+//     // u -> px (0 ở bên PHẢI)
+//     var p1 = uMap.uToPx(spanAbs.u1);
+//     var p2 = uMap.uToPx(spanAbs.u2);
+//     var x1 = Math.min(p1, p2);
+//     var x2 = Math.max(p1, p2);
 
-  voyCode: voyCode
-};
+//     // Clamp theo biên bản đồ
+//     var vx1 = Math.max(BMIN + EDGE_PAD, x1);
+//     var vx2 = Math.min(BMAX - EDGE_PAD, x2);
+//     if (vx2 <= vx1) vx2 = vx1 + 2;  
+//     var w = vx2 - vx1;             
+//     var ppm = uMap.pxPerUnit;
 
-    // (function(meta,g,hit){
-    //   function showPopoverShip(){
-    //     var equipStr=(meta.equipment||'').trim();
-    //     var eqList=equipStr?equipStr.split(';').filter(function(x){return x && x!=='*';}):[];
-    //     var gangs=eqList.length || '—';
+//     var loaM = w / ppm;
+//     var estBeamM = (ship.BeamM && +ship.BeamM>0) ? (+ship.BeamM) : (loaM * 0.12);
+//     var h = Math.max(MIN_SHIP_HEIGHT, estBeamM * ppm * BEAM_VISUAL_SCALE);
 
-    //     popTitle.textContent = meta.shipName || 'Tàu';
-    //     popBody.innerHTML =
-    //       '<div class="sec table blue">'+
-    //         '<div class="sec-hd">'+(meta.shipName||'—')+'</div>'+
-    //         '<div class="sec-body"><table>'+
-    //           '<tr><td>Hãng tàu</td><td>'+(meta.oprId||'—')+'</td></tr>'+
-    //           '<tr><td>Bến (theo dữ liệu)</td><td>'+(meta.berthName||'—')+'</td></tr>'+
-    //           '<tr><td>Số cẩu</td><td><span class="pill blue">'+(gangs)+'</span></td></tr>'+
-    //           '<tr><td>Tiến độ</td><td><span class="pill green">'+((meta.progress!=null)?meta.progress:'—')+'%</span></td></tr>'+
-    //         '</table></div>'+
-    //       '</div>'+
-    //       '<div class="sec table amber">'+
-    //         '<div class="sec-hd">Thời gian</div>'+
-    //         '<div class="sec-body"><table>'+
-    //           '<tr><td>ETA</td><td>'+fmtDate(meta.eta)+'</td></tr>'+
-    //           '<tr><td>ETD</td><td>'+fmtDate(meta.etd)+'</td></tr>'+
-    //         '</table></div>'+
-    //       '</div>'+
-    //       '<div class="sec table gray">'+
-    //         '<div class="sec-hd">Khung tàu</div>'+
-    //         '<div class="sec-body"><table>'+
-    //           '<tr><td>Mã chuyến</td><td>'+(meta.shipKey||'—')+'</td></tr>'+
-    //           '<tr><td>Vị trí (u)</td><td>'+(meta.uRange||'—')+'</td></tr>'+
-    //           '<tr><td>px/Unit</td><td>'+(meta.pxPerUnit||'—')+'</td></tr>'+
-    //           '<tr class="sum-row"><td>Kích thước ước tính</td><td>'+(meta.size||'—')+'</td></tr>'+
-    //         '</table></div>'+
-    //       '</div>';
-    //     showPopoverForSvgAnchor(g,'above');
-    //   }
-    //   hit.addEventListener('pointerup', function(e){ e.stopPropagation(); showPopoverShip(); }, {passive:true});
-    //   if (CAN_HOVER){
-    //     var hideT=null;
-    //     g.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); showPopoverShip(); });
-    //     g.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
-    //     pop.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); });
-    //     pop.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
-    //   }
-    // })(meta,g,hit);
- (function(meta, g, hit){
-  // Tổng hợp job theo ShipKey (Container/Đã thực hiện/Còn lại)
-  function summarizeJobs(jobData, shipKey){
-    var rows = { nhap:{total:0, done:0}, xuat:{total:0, done:0}, dao:{total:0, done:0} };
-    for (var i=0;i<(jobData||[]).length;i++){
-      var j = jobData[i]; if (j.ShipKey !== it.ship.ShipKey) continue;
-      var cnt = (+j.JobCount)||0;
-      var done = (j.Status==='F' || j.Status==='R') ? cnt : 0;
+//     items.push({ ship: ship, abs: spanAbs, px:{x1:vx1,x2:vx2}, w:w, h:h, lane:0 });
+//   }
+//   if (!items.length) return;
 
-      var mode = (j.JobMode||'').toUpperCase();
-      var name = (j.JobModeName||'').toLowerCase();
 
-      if (mode==='NTAU' || name.indexOf('nhập')>=0){ rows.nhap.total+=cnt; rows.nhap.done+=done; }
-      else if (mode==='XTAU' || name.indexOf('xuất')>=0){ rows.xuat.total+=cnt; rows.xuat.done+=done; }
-      else if (name.indexOf('đảo')>=0 || name.indexOf('dao')>=0){ rows.dao.total+=cnt; rows.dao.done+=done; }
-    }
-    rows.nhap.left = Math.max(0, rows.nhap.total - rows.nhap.done);
-    rows.xuat.left = Math.max(0, rows.xuat.total - rows.xuat.done);
-    rows.dao.left  = Math.max(0, rows.dao.total  - rows.dao.done);
-    var total = rows.nhap.total + rows.xuat.total + rows.dao.total;
-    var done  = rows.nhap.done  + rows.xuat.done  + rows.dao.done;
-    return {rows:rows, total:total, done:done, left:Math.max(0,total-done)};
-  }
-
- function esc(s){ return (s==null?'—':String(s))
-  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-function showPopoverShip(){
-  // Tổng hợp job cho 3 dòng Nhập/Xuất/Đảo + Tổng
-  function summarizeJobs(jobData, shipKey){
-    var rows = { nhap:{total:0,done:0}, xuat:{total:0,done:0}, dao:{total:0,done:0} };
-    for (var i=0;i<(jobData||[]).length;i++){
-      var j = jobData[i]; if (j.ShipKey !== it.ship.ShipKey) continue;
-      var cnt=(+j.JobCount)||0, done=(j.Status==='F'||j.Status==='R')?cnt:0;
-      var mode=(j.JobMode||'').toUpperCase(), name=(j.JobModeName||'').toLowerCase();
-      if (mode==='NTAU'||name.indexOf('nhập')>=0){ rows.nhap.total+=cnt; rows.nhap.done+=done; }
-      else if (mode==='XTAU'||name.indexOf('xuất')>=0){ rows.xuat.total+=cnt; rows.xuat.done+=done; }
-      else if (name.indexOf('đảo')>=0||name.indexOf('dao')>=0){ rows.dao.total+=cnt; rows.dao.done+=done; }
-    }
-    rows.nhap.left=Math.max(0,rows.nhap.total-rows.nhap.done);
-    rows.xuat.left=Math.max(0,rows.xuat.total-rows.xuat.done);
-    rows.dao.left =Math.max(0,rows.dao.total -rows.dao.done );
-    var total=rows.nhap.total+rows.xuat.total+rows.dao.total;
-    var done =rows.nhap.done +rows.xuat.done +rows.dao.done ;
-    return {rows:rows,total:total,done:done,left:Math.max(0,total-done)};
-  }
-
-  var agg = summarizeJobs(window.__JOB_DATA__ || jobData, it.ship.ShipKey);
+//   var lanes = assignLanesNoOverlap(items, 8);
 
  
-  popTitle.textContent = meta.shipName || 'Tàu';
+//   for (var i=0;i<items.length;i++){
+//     var it = items[i], w = it.w, h = it.h;
+
+    
+    
+//     drawCranesForShip(it);  
+//     var cx = (it.px.x1 + it.px.x2) / 2;
+//     var baseY = seaBottomY - SEA_BOTTOM_CLEAR - (lanes.laneOffsets[it.lane] || 0);
+
+//     var g = svgEl('g', {
+//       'class':'ship',
+//       transform: 'translate(' + cx + ',' + baseY + ')',
+//       'data-shipkey': it.ship.ShipKey
+//     });
+//     shipsLayer.appendChild(g);
+// var gSprite = svgEl('g', {});
+// g.appendChild(gSprite);
+
  
-  popBody.innerHTML =
-    "<div style='max-width:384px'>" +
+// var faceScaleX = (String(it.ship.ALongSide||'P').toUpperCase() === 'P') ? 1 : -1;
+ 
+//     var visLeft  = -w/2 + SHIFT_X;
+//     var visRight =  w/2 + SHIFT_X;
+// var imgX = (faceScaleX === 1) ? visLeft : (-visRight);
+//    gSprite.setAttribute('transform', 'scale('+faceScaleX+',1)');
+//     var spr = (it.ship.IsROROVessel) ? SHIP_SPRITES[1] : SHIP_SPRITES[0];
+//     g.appendChild(svgEl('image', {
+//       href: spr.src,
+//       x: imgX, y: -h,
+//       width: w, height: h,
+//       preserveAspectRatio: 'none'    
+//     }));
+
+    
+//     var prog = progressFromJobs(jobData, it.ship.ShipKey);
+//     var jobship= getJob(jobData, it.ship.ShipKey);
+//     var trackW = Math.max(8, Math.min(14, Math.floor(h * 0.22)));
+//     var trackH = Math.max(14, Math.min(Math.floor(h - 4), Math.floor(h * 0.96)));
+//     var trackY = -h + 2;
+ 
+//     var INSET_RIGHT = Math.max(6, Math.min(24, Math.floor(Math.min(h, w) * 0.20)));
+//     var EXTRA_STERN_SHIFT = (w >= 220 ? 10 : 0);
+//     var MARGIN_RIGHT = -10;
+
+//     var maxRightInside = visRight - MARGIN_RIGHT;         
+//     var trackX = maxRightInside - INSET_RIGHT - trackW - EXTRA_STERN_SHIFT;
+
+ 
+//     var minLeftInside = visLeft + 2;
+//     if (trackX < minLeftInside) trackX = minLeftInside;
+
+//     var fillH = Math.round(trackH * (prog / 100));
+//     var fillY = trackY + (trackH - fillH);
+
+//     g.appendChild(svgEl('rect', { x:trackX, y:trackY, width:trackW, height:trackH, rx:trackW/2, fill:'#e9ecef' }));
+//     g.appendChild(svgEl('rect', { x:trackX, y:fillY, width:trackW, height:fillH, rx:trackW/2, fill:'#34c759' }));
+
+ 
+//     var fontSize = Math.max(10, Math.min(16, Math.floor(h * 0.34)));
+//     var tyMid = trackY + trackH/2 + Math.floor(fontSize/3);
+//     var GAP_TX = Math.max(4, Math.min(10, Math.floor(h * 0.12)));
+//     var txRight = trackX + trackW + GAP_TX+10;
+//     var maxInside = visRight - 2;
+//     if (txRight > maxInside) txRight = maxInside;
+
+//     g.appendChild(svgEl('text', {
+//       x: trackX-5, y: trackY-5, 'font-size': fontSize, 'font-weight': '700',
+//       fill:'#1d3f77', 'text-anchor':'start'
+//     }, String(prog) + '%'));
+
+//     // Hitbox (trùm đúng ảnh đã dời)
+//     var hitPad = 8;
+//     var hit = svgEl('rect', {
+//       'class':'hit',
+//       x: visLeft - hitPad,
+//       y: -h - hitPad,
+//       width: (visRight - visLeft) + hitPad*2,
+//       height: h + hitPad*2,
+//       fill:'#000', 'fill-opacity':'0.001'
+//     });
+//     g.appendChild(hit);
+
+ 
+//     var berthNameFromData = berthNoToName(berths, it.ship.BerthNo);
+//     var ppm2 = uMap.pxPerUnit;
+//     // var meta = {
+//     //   shipName: it.ship.ShipName,
+//     //   shipKey:  it.ship.ShipKey,
+//     //   berthName: berthNameFromData,
+//     //   uRange: it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1),
+//     //   uSpan:  it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1)+' (pxPerUnit='+ppm2.toFixed(3)+')',
+//     //   size:   '~'+(w/ppm2).toFixed(1)+' m × '+(h/(ppm2*BEAM_VISUAL_SCALE)).toFixed(1)+' m (ước tính)',
+//     //   progress: prog,
+//     //   eta: it.ship.ETA || '—',
+//     //   etd: it.ship.ETD || it.ship.Etd || '—',
+//     //   equipment: it.ship.Equipment || '',
+//     //   oprId: it.ship.OprId || it.ship.oprId || '—',
+//     //   pxPerUnit: ppm2.toFixed(3)
+//     // };
+//  // --- thời gian từ API (nếu chưa có thì '—')
+// var berthDate = it.ship.BerthDate || null;
+// var atw       = it.ship.ATW       || null;
+// var etc       = it.ship.ETC       || null;
+// var etw = it.ship.ETW||null 
+ 
+// var equipStr  = (it.ship.Equipment || '').trim();
+// var equipList = equipStr ? equipStr.split(';').filter(function(x){ return x && x!=='*'; }) : [];
+// var gangCount =    null;
+//  var JobDoing= jobship ? (jobship.JobDoing||0) : 0;
+
+//   var totalJob    = jobship ? (jobship.TotalJob||0) : 0;
+//   var doneJob    = JobDoing ?  (totalJob-JobDoing): 0;
+// var teus         = jobship!= null ? jobship.TotalTeu :  null;
+// var productivity = ( jobship!= null ? jobship.PercentDone: null);
+// var Discharge_TotalJob= jobship!= null ? jobship.Discharge_TotalJob :  null;
+// var Discharge_JobDoing=jobship!=null?jobship.Discharge_JobDoing :  null;
+// var Discharge_DoneJob=(Discharge_TotalJob!=null &&Discharge_JobDoing!=null) ?Discharge_TotalJob-Discharge_JobDoing:  null;
+// var Loading_TotalJob= jobship!= null ? jobship.Loading_TotalJob :  null;
+// var Loading_JobDoing=jobship!= null ? jobship.Loading_JobDoing :  null;
+// var Loading_DoneJob=(Loading_TotalJob!=null &&Loading_JobDoing!=null) ?Loading_TotalJob-Loading_JobDoing:  null;
+// var Shifting_TotalJob=jobship!= null ? jobship.Shifting_TotalJob :  null;
+// var Shifting_JobDoing=jobship!= null ? jobship.Shifting_JobDoing :  null;
+// var Shifting_Done=(Shifting_TotalJob!=null &&Shifting_JobDoing!=null) ?Shifting_TotalJob-Shifting_JobDoing:  null;
+// function buildVoyCode(s){
+//   var a = (s.ShipID||'').toString().trim();
+//   var b = (s.ShipYear||'').toString().trim();
+//   var c = (s.ShipVoy||'').toString().trim();
+//   var out = [a,b,c].filter(Boolean).join('-');
+//   return out || (s.ImVoy || s.ExVoy || '—');
+// }
+// var voyCode = buildVoyCode(it.ship);
+
+
+// var meta = {
+//   shipName: it.ship.ShipName,
+//   berthName: berthNameFromData,
+//   progress: prog,
+//   uRange: it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1),
+//   uSpan:  it.abs.u1.toFixed(1)+' → '+it.abs.u2.toFixed(1)+' (pxPerUnit='+ppm2.toFixed(3)+')',
+//   size:   '~'+(w/ppm2).toFixed(1)+' m × '+(h/(ppm2*BEAM_VISUAL_SCALE)).toFixed(1)+' m (ước tính)',
+//   pxPerUnit: ppm2.toFixed(3),
+//   oprId: it.ship.OprId || it.ship.oprId || '—',
+//   equipment: it.ship.Equipment || '',
+
+//   gangCount: (gangCount==null ? '—' : gangCount),
+//   teus: (teus==null ? '—' : teus),
+//   productivity: (productivity==null ? '—' : productivity),
+//   doneJob :doneJob||0,
+//   JobDoing:JobDoing||0,
+//   totalJob:totalJob||0,
+//   Shifting_TotalJob:Shifting_TotalJob||0,
+//   Shifting_JobDoing:Shifting_JobDoing||0,
+//   Shifting_Done:Shifting_Done||0,
+//   Discharge_TotalJob:Discharge_TotalJob||0,
+//   Discharge_JobDoing:Discharge_JobDoing||0,
+//   Discharge_DoneJob:Discharge_DoneJob||0,
+//   Loading_TotalJob:Loading_TotalJob||0,
+//   Loading_JobDoing:Loading_JobDoing||0,
+//   Loading_DoneJob:Loading_DoneJob||0,
+//   berthDate: berthDate || '—',
+//   atw:       atw       || '—',
+//   etc:       etc       || '—',
+//   etw:       etw || '-',
+//   voyCode: voyCode
+// };
+
+//     // (function(meta,g,hit){
+//     //   function showPopoverShip(){
+//     //     var equipStr=(meta.equipment||'').trim();
+//     //     var eqList=equipStr?equipStr.split(';').filter(function(x){return x && x!=='*';}):[];
+//     //     var gangs=eqList.length || '—';
+
+//     //     popTitle.textContent = meta.shipName || 'Tàu';
+//     //     popBody.innerHTML =
+//     //       '<div class="sec table blue">'+
+//     //         '<div class="sec-hd">'+(meta.shipName||'—')+'</div>'+
+//     //         '<div class="sec-body"><table>'+
+//     //           '<tr><td>Hãng tàu</td><td>'+(meta.oprId||'—')+'</td></tr>'+
+//     //           '<tr><td>Bến (theo dữ liệu)</td><td>'+(meta.berthName||'—')+'</td></tr>'+
+//     //           '<tr><td>Số cẩu</td><td><span class="pill blue">'+(gangs)+'</span></td></tr>'+
+//     //           '<tr><td>Tiến độ</td><td><span class="pill green">'+((meta.progress!=null)?meta.progress:'—')+'%</span></td></tr>'+
+//     //         '</table></div>'+
+//     //       '</div>'+
+//     //       '<div class="sec table amber">'+
+//     //         '<div class="sec-hd">Thời gian</div>'+
+//     //         '<div class="sec-body"><table>'+
+//     //           '<tr><td>ETA</td><td>'+fmtDate(meta.eta)+'</td></tr>'+
+//     //           '<tr><td>ETD</td><td>'+fmtDate(meta.etd)+'</td></tr>'+
+//     //         '</table></div>'+
+//     //       '</div>'+
+//     //       '<div class="sec table gray">'+
+//     //         '<div class="sec-hd">Khung tàu</div>'+
+//     //         '<div class="sec-body"><table>'+
+//     //           '<tr><td>Mã chuyến</td><td>'+(meta.shipKey||'—')+'</td></tr>'+
+//     //           '<tr><td>Vị trí (u)</td><td>'+(meta.uRange||'—')+'</td></tr>'+
+//     //           '<tr><td>px/Unit</td><td>'+(meta.pxPerUnit||'—')+'</td></tr>'+
+//     //           '<tr class="sum-row"><td>Kích thước ước tính</td><td>'+(meta.size||'—')+'</td></tr>'+
+//     //         '</table></div>'+
+//     //       '</div>';
+//     //     showPopoverForSvgAnchor(g,'above');
+//     //   }
+//     //   hit.addEventListener('pointerup', function(e){ e.stopPropagation(); showPopoverShip(); }, {passive:true});
+//     //   if (CAN_HOVER){
+//     //     var hideT=null;
+//     //     g.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); showPopoverShip(); });
+//     //     g.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+//     //     pop.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); });
+//     //     pop.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+//     //   }
+//     // })(meta,g,hit);
+//  (function(meta, g, hit){
+//   // Tổng hợp job theo ShipKey (Container/Đã thực hiện/Còn lại)
+//   function summarizeJobs(jobData, shipKey){
+//     var rows = { nhap:{total:0, done:0}, xuat:{total:0, done:0}, dao:{total:0, done:0} };
+//     for (var i=0;i<(jobData||[]).length;i++){
+//       var j = jobData[i]; if (j.ShipKey !== it.ship.ShipKey) continue;
+//       var cnt = (+j.JobCount)||0;
+//       var done = (j.Status==='F' || j.Status==='R') ? cnt : 0;
+
+//       var mode = (j.JobMode||'').toUpperCase();
+//       var name = (j.JobModeName||'').toLowerCase();
+
+//       if (mode==='NTAU' || name.indexOf('nhập')>=0){ rows.nhap.total+=cnt; rows.nhap.done+=done; }
+//       else if (mode==='XTAU' || name.indexOf('xuất')>=0){ rows.xuat.total+=cnt; rows.xuat.done+=done; }
+//       else if (name.indexOf('đảo')>=0 || name.indexOf('dao')>=0){ rows.dao.total+=cnt; rows.dao.done+=done; }
+//     }
+//     rows.nhap.left = Math.max(0, rows.nhap.total - rows.nhap.done);
+//     rows.xuat.left = Math.max(0, rows.xuat.total - rows.xuat.done);
+//     rows.dao.left  = Math.max(0, rows.dao.total  - rows.dao.done);
+//     var total = rows.nhap.total + rows.xuat.total + rows.dao.total;
+//     var done  = rows.nhap.done  + rows.xuat.done  + rows.dao.done;
+//     return {rows:rows, total:total, done:done, left:Math.max(0,total-done)};
+//   }
+
+//  function esc(s){ return (s==null?'—':String(s))
+//   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// function showPopoverShip(){
+//   // Tổng hợp job cho 3 dòng Nhập/Xuất/Đảo + Tổng
+//   function summarizeJobs(jobData, shipKey){
+//     var rows = { nhap:{total:0,done:0}, xuat:{total:0,done:0}, dao:{total:0,done:0} };
+//     for (var i=0;i<(jobData||[]).length;i++){
+//       var j = jobData[i]; if (j.ShipKey !== it.ship.ShipKey) continue;
+//       var cnt=(+j.JobCount)||0, done=(j.Status==='F'||j.Status==='R')?cnt:0;
+//       var mode=(j.JobMode||'').toUpperCase(), name=(j.JobModeName||'').toLowerCase();
+//       if (mode==='NTAU'||name.indexOf('nhập')>=0){ rows.nhap.total+=cnt; rows.nhap.done+=done; }
+//       else if (mode==='XTAU'||name.indexOf('xuất')>=0){ rows.xuat.total+=cnt; rows.xuat.done+=done; }
+//       else if (name.indexOf('đảo')>=0||name.indexOf('dao')>=0){ rows.dao.total+=cnt; rows.dao.done+=done; }
+//     }
+//     rows.nhap.left=Math.max(0,rows.nhap.total-rows.nhap.done);
+//     rows.xuat.left=Math.max(0,rows.xuat.total-rows.xuat.done);
+//     rows.dao.left =Math.max(0,rows.dao.total -rows.dao.done );
+//     var total=rows.nhap.total+rows.xuat.total+rows.dao.total;
+//     var done =rows.nhap.done +rows.xuat.done +rows.dao.done ;
+//     return {rows:rows,total:total,done:done,left:Math.max(0,total-done)};
+//   }
+
+//   var agg = summarizeJobs(window.__JOB_DATA__ || jobData, it.ship.ShipKey);
+
+ 
+//   popTitle.textContent = meta.shipName || 'Tàu';
+//  var wktitle=(meta.atw!="—")?"Bắt đầu làm hàng":"Dự kiến làm hàng";
+//  var wkvl=(meta.atw!="—")?esc(fmtDate(meta.atw)):esc(fmtDate(meta.etw));
+//   popBody.innerHTML =
+//     "<div style='max-width:384px'>" +
 
   
-      "<table style='width:100%;border-collapse:collapse'>" +
+//       "<table style='width:100%;border-collapse:collapse'>" +
       
-        "<tbody>" +
-          "<tr>" +
-            "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Hãng tàu: <strong style='color:#0b66c3'>"+esc(meta.oprId)+"</strong></td>" +
-            "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Số máng: <strong style='color:#0b66c3'>"+esc(meta.gangCount)+"</strong></td>" +
-          "</tr>" +
-          "<tr>" +
-            "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng TEUS: <strong style='color:#0b66c3'>"+esc(meta.teus)+"</strong></td>" +
-            "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Năng suất: <strong style='color:#0b66c3'>"+esc(meta.productivity)+"</strong></td>" +
-          "</tr>" +
-        "</tbody>" +
-      "</table>" +
+//         "<tbody>" +
+//           "<tr>" +
+//             "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Hãng tàu: <strong style='color:#0b66c3'>"+esc(meta.oprId)+"</strong></td>" +
+//             "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Số máng: <strong style='color:#0b66c3'>"+esc(meta.gangCount)+"</strong></td>" +
+//           "</tr>" +
+//           "<tr>" +
+//             "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng TEUS: <strong style='color:#0b66c3'>"+esc(meta.teus)+"</strong></td>" +
+//             "<td style='border:1px solid #e5e9ef;padding:6px 8px'>Năng suất: <strong style='color:#0b66c3'>"+esc(meta.productivity)+"</strong></td>" +
+//           "</tr>" +
+//         "</tbody>" +
+//       "</table>" +
 
        
-      "<div style='height:4px;background:#00468A;margin:0px 0 8px 0'></div>" +
+//       "<div style='height:4px;background:#00468A;margin:0px 0 8px 0'></div>" +
 
   
-      "<table style='width:100%;border-collapse:collapse'>" +
-        "<tr>" +
-          "<th style='text-align:left;font:600 12px system-ui;color:#223;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>Thời gian cập cầu</th>" +
-          "<th style='text-align:right;font:800 12px system-ui;color:#f39c12;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>"+esc(fmtDate(meta.berthDate))+"</th>" +
-        "</tr>" +
-        "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>Bắt đầu làm hàng</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+esc(fmtDate(meta.atw))+"</td></tr>" +
-        "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>Dự kiến xong</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+esc(fmtDate(meta.etc))+"</td></tr>" +
-      "</table>" +
+//       "<table style='width:100%;border-collapse:collapse'>" +
+//         "<tr>" +
+//           "<th style='text-align:left;font:600 12px system-ui;color:#223;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>Thời gian cập cầu</th>" +
+//           "<th style='text-align:right;font:800 12px system-ui;color:#f39c12;padding:6px 8px;border:1px solid #f1f3f6;background:#fff'>"+esc(fmtDate(meta.berthDate))+"</th>" +
+//         "</tr>" +
+//         "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>"+wktitle+"</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+wkvl+"</td></tr>" +
+//         "<tr><td style='padding:6px 8px;border:1px solid #f1f3f6'>Dự kiến xong</td><td style='padding:6px 8px;border:1px solid #f1f3f6;text-align:right'>"+esc(fmtDate(meta.etc))+"</td></tr>" +
+//       "</table>" +
 
       
-      "<div style='height:4px;background:#00468A;margin:8px 0'></div>" +
+//       "<div style='height:4px;background:#00468A;margin:8px 0'></div>" +
 
  
-      "<table style='width:100%;border-collapse:collapse'>" +
-        "<tr>" +
-          "<th style='font-weight:400;border:1px solid #e5e9ef;padding:6px 8px;text-align:left'>"+esc(meta.voyCode)+"</th>" +
-          "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Container</th>" +
-          "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Đã thực hiện</th>" +
-          "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Còn lại</th>" +
-        "</tr>" +
-        "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Nhập</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.nhap.total+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.nhap.done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.nhap.left+"</td></tr>" +
-        "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Xuất</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.xuat.total+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.xuat.done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.xuat.left+"</td></tr>" +
-        "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Đảo chuyển</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.dao.total+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.dao.done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.rows.dao.left+"</td></tr>" +
-        "<tr style='background:#FFF9E2'><td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.total+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+agg.left+"</td></tr>" +
-      "</table>" +
+//       "<table style='width:100%;border-collapse:collapse'>" +
+//         "<tr>" +
+//           "<th style='font-weight:400;border:1px solid #e5e9ef;padding:6px 8px;text-align:left'>"+esc(meta.voyCode)+"</th>" +
+//           "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Container</th>" +
+//           "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Đã thực hiện</th>" +
+//           "<th style='border:1px solid #e5e9ef;padding:6px 8px'>Còn lại</th>" +
+//         "</tr>" +
+//         "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Nhập</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Loading_JobDoing+"</td></tr>" +
+//         "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Xuất</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_TotalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_DoneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Discharge_JobDoing+"</td></tr>" +
+//         "<tr><td style='border:1px solid #e5e9ef;padding:6px 8px'>Đảo chuyển</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_TotalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_Done+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.Shifting_JobDoing+"</td></tr>" +
+//         "<tr style='background:#FFF9E2'><td style='border:1px solid #e5e9ef;padding:6px 8px'>Tổng</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.totalJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.doneJob+"</td><td style='border:1px solid #e5e9ef;text-align:center'>"+meta.JobDoing+"</td></tr>" +
+//       "</table>" +
 
-    "</div>";
+//     "</div>";
 
-  showPopoverForSvgAnchor(g,'above');  
-}
+//   showPopoverForSvgAnchor(g,'above');  
+// }
 
-  window.__JOB_DATA__ = jobData;
-  hit.addEventListener('pointerup', function(e){ e.stopPropagation(); showPopoverShip(); }, {passive:true});
-  if (CAN_HOVER){
-    var hideT=null;
-    g.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); showPopoverShip(); });
-    g.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
-    pop.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); });
-    pop.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
-  }
-})(meta, g, hit);
+//   window.__JOB_DATA__ = jobData;
+//   hit.addEventListener('pointerup', function(e){ e.stopPropagation(); showPopoverShip(); }, {passive:true});
+//   if (CAN_HOVER){
+//     var hideT=null;
+//     g.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); showPopoverShip(); });
+//     g.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+//     pop.addEventListener('mouseenter', function(){ if(hideT) clearTimeout(hideT); });
+//     pop.addEventListener('mouseleave', function(){ hideT=setTimeout(hidePopover,160); });
+//   }
+// })(meta, g, hit);
 
 
-  }
-}
+//   }
+// }
    
 var jobsCard=document.getElementById('jobsCard'), toggleBtn=document.getElementById('toggleJobs'), jobsBody=document.getElementById('jobsBody'), jobsToggle=document.getElementById('jobsToggle');
 toggleBtn.onclick=function(){ var open=!jobsCard.classList.contains('open'); jobsCard.classList.toggle('open',open); toggleBtn.classList.toggle('rotate',open); if(open){jobsBody.style.display='block'; jobsToggle.textContent='Ẩn ▲';} };
