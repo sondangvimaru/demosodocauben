@@ -36,7 +36,18 @@
   .card .cols{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font:500 13px/1.45 system-ui}
   .card .cols div:nth-child(odd){color:#607085}
   .card .cols div:nth-child(even){color:#1b2734}
-
+.card .more{ display:none; margin-top:8px }
+.card.open .more{ display:grid }
+.card .more-toggle{
+  margin-top:8px; display:flex; align-items:center; gap:6px;
+  border:1px solid #e5e9ef; background:#f8fafc; padding:6px 10px; border-radius:8px;
+  font:700 13px/1 system-ui; cursor:pointer;
+}
+.card .chev{
+  width:16px;height:16px;display:inline-block;transform:rotate(0deg);
+  transition:transform .2s ease; border:0; box-shadow:none; background:transparent; 
+}
+.card.open .chev{ transform:rotate(90deg) }
   .chev{position:absolute;z-index:50;right:10px;top:10px;width:36px;height:36px;border-radius:10px;border:1px solid #e3e6ea;background:#fff;display:none;align-items:center;justify-content:center;font:900 16px/1 system-ui;box-shadow:0 6px 16px #0003;cursor:pointer}
   .chev.rotate{transform:rotate(180deg)}
   @media (max-width: 960px){
@@ -1736,7 +1747,7 @@ jobsToggle.onclick=function(){ var open=jobsBody.style.display!=='none'; jobsBod
     }
   }
 
-  // Render CARDS (mobile)
+  
   if (cards){
     for (let r of rows){
       const div = document.createElement('div');
@@ -1747,7 +1758,6 @@ jobsToggle.onclick=function(){ var open=jobsBody.style.display!=='none'; jobsBod
           '<div>Bến</div><div>'+r.berth+'</div>'+
           '<div>Hãng tàu</div><div>'+r.opr+'</div>'+
           '<div>TEUs</div><div>'+r.teus+'</div>'+
-          '<div>Năng suất</div><div>'+r.productivity+'%</div>'+
             '<div>Tiến độ</div><div><div class="bar"><i style="width:'+r.productivity+'%">'+r.productivity+'%</i></div></div>'+
           '<div>Thời gian cập cầu</div><div>'+r.etb+'</div>'+
           '<div>Bắt đầu làm hàng</div><div>'+r.wkStart+'</div>'+
