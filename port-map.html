@@ -129,19 +129,47 @@
   <div class="warn" id="warn" style="display:none">Chưa có dữ liệu. Hãy nhập ở “Data Entry”.</div>
 
   <!-- Jobs -->
-  <div class="jobs" id="jobsCard">
-    <div class="jobs-header">
-      <div class="jobs-title">Tiến độ làm hàng (theo tàu)</div>
-      <button class="jobs-toggle" id="jobsToggle">Ẩn ▲</button>
-    </div>
-    <div class="jobs-body" id="jobsBody">
-      <table id="jobsTable">
-        <thead><tr><th>Bến</th><th>Tàu</th><th class="hide-sm">ShipKey</th><th class="hide-sm">ETA → ETD</th><th>%</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div id="jobsCards" class="cards"></div>
-    </div>
+<div class="jobs" id="jobsCard">
+  <div class="jobs-header">
+    <div class="jobs-title">Tiến độ làm hàng (theo tàu)</div>
+    <button class="jobs-toggle" id="jobsToggle">Ẩn ▲</button>
   </div>
+  <div class="jobs-body" id="jobsBody">
+   <table id="jobsTable">
+  <thead>
+    <tr>
+      <th>Bến</th>
+      <th>Tên tàu</th>
+      <th>Hãng tàu</th>
+      <th>TEUs</th>
+      <th>Năng suất (%)</th>
+      <th>Thời gian cập cầu</th>
+      <th>Bắt đầu làm hàng</th>
+      <th>Dự kiến xong</th>
+
+      <th>Nhập - Tổng</th>
+      <th>Nhập - Đã thực hiện</th>
+      <th>Nhập - Còn lại</th>
+
+      <th>Xuất - Tổng</th>
+      <th>Xuất - Đã thực hiện</th>
+      <th>Xuất - Còn lại</th>
+
+      <th>Đảo chuyển - Tổng</th>
+      <th>Đảo chuyển - Đã thực hiện</th>
+      <th>Đảo chuyển - Còn lại</th>
+
+      <th>Tổng - Tổng</th>
+      <th>Tổng - Đã thực hiện</th>
+      <th>Tổng - Còn lại</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+    <div id="jobsCards" class="cards"></div>
+  </div>
+</div>
 
   <!-- Panels -->
   <div class="panel" id="shipPanel">
@@ -1047,7 +1075,7 @@ function drawShips(ships, berths, uMap, jobData){
  
     var fontSize = Math.max(10, Math.min(16, Math.floor(h * 0.34)));
     gUI.appendChild(svgEl('text', {
-      x: trackX, y: trackY-5, 'font-size': fontSize, 'font-weight': '700',
+      x: trackX, y: trackY-5, 'font-size': fontSize, 'font-weight': '800',
       fill:'#1d3f77', 'text-anchor':'start'
     }, String(prog) + '%'));
 
@@ -1601,44 +1629,201 @@ function drawShips(ships, berths, uMap, jobData){
 var jobsCard=document.getElementById('jobsCard'), toggleBtn=document.getElementById('toggleJobs'), jobsBody=document.getElementById('jobsBody'), jobsToggle=document.getElementById('jobsToggle');
 toggleBtn.onclick=function(){ var open=!jobsCard.classList.contains('open'); jobsCard.classList.toggle('open',open); toggleBtn.classList.toggle('rotate',open); if(open){jobsBody.style.display='block'; jobsToggle.textContent='Ẩn ▲';} };
 jobsToggle.onclick=function(){ var open=jobsBody.style.display!=='none'; jobsBody.style.display=open?'none':'block'; jobsToggle.textContent=open?'Hiện ▼':'Ẩn ▲'; };
+ function buildJobsUI(ships, berths, jobData){
+  const tbody = document.querySelector('#jobsTable tbody');
+  const cards = document.getElementById('jobsCards');
+  if (tbody) tbody.innerHTML = '';
+  if (cards) cards.innerHTML = '';
 
-function buildJobsUI(ships, berths, jobData){
-  var tbody=document.querySelector('#jobsTable tbody'); tbody.innerHTML='';
-  var cards=document.getElementById('jobsCards'); cards.innerHTML='';
-  var seen={}, rows=[], i;
-
-  for(i=0;i<(ships||[]).length;i++){ var s=ships[i]; if(seen[s.ShipKey]) continue; seen[s.ShipKey]=1;
-    var berthName=berthNoToName(berths, s.BerthNo)||'—';
-    var prog=progressFromJobs(jobData,s.ShipKey);
-    rows.push({key:s.ShipKey, ship:s.ShipName||'—', berth:berthName, eta:s.ETA||'—', etd:s.ETD||s.Etd||'—', prog:prog});
-  }
-  rows.sort(function(a,b){ return (a.berth||'').localeCompare(b.berth||'') || (b.prog-a.prog); });
-
-  for(i=0;i<rows.length;i++){
-    var r=rows[i];
-    var tr=document.createElement('tr');
-    tr.innerHTML='<td>'+r.berth+'</td><td class="ship">'+r.ship+'</td>'+
-      '<td class="hide-sm">'+r.key+'</td><td class="hide-sm">'+r.eta+' → '+r.etd+'</td>'+
-      '<td style="min-width:160px"><div class="bar"><i style="width:'+r.prog+'%">'+r.prog+'%</i></div></td>';
-    tr.addEventListener('click',(function(key){ return function(){ focusShipByKey(key); }; })(r.key));
-    tbody.appendChild(tr);
+  // Map JobData theo ShipKey
+  const jobByKey = {};
+  for (let j of (jobData || [])){
+    if (j && j.ShipKey) jobByKey[j.ShipKey] = j;
   }
 
-  for(i=0;i<rows.length;i++){
-    var rr=rows[i];
-    var div=document.createElement('div'); div.className='card';
-    div.innerHTML='<div class="hdr">'+rr.ship+'</div>'+
-      '<div class="cols">'+
-      '<div>Bến</div><div>'+rr.berth+'</div>'+
-      '<div>ShipKey</div><div>'+rr.key+'</div>'+
-      '<div>ETA</div><div>'+rr.eta+'</div>'+
-      '<div>ETD</div><div>'+rr.etd+'</div>'+
-      '<div>Tiến độ</div><div><div class="bar"><i style="width:'+rr.prog+'%">'+rr.prog+'%</i></div></div>'+
-      '</div>';
-    div.addEventListener('click',(function(key){ return function(){ focusShipByKey(key); jobsCard.classList.remove('open'); toggleBtn.classList.remove('rotate'); }; })(rr.key));
-    cards.appendChild(div);
+  // Helper
+  const N = v => (v==null || isNaN(v)) ? 0 : +v;
+
+  // Duy nhất theo ShipKey
+  const seen = {};
+  const rows = [];
+  for (let s of (ships || [])){
+    if (!s || seen[s.ShipKey]) continue;
+    seen[s.ShipKey] = 1;
+
+    const job = jobByKey[s.ShipKey] || {};
+
+    // Nhập / Xuất / Đảo
+    const loadTotal = N(job.Loading_TotalJob);
+    const loadDoing = N(job.Loading_JobDoing);
+    const loadDone  = Math.max(0, loadTotal - loadDoing);
+
+    const discTotal = N(job.Discharge_TotalJob);
+    const discDoing = N(job.Discharge_JobDoing);
+    const discDone  = Math.max(0, discTotal - discDoing);
+
+    const shiftTotal = N(job.Shifting_TotalJob);
+    const shiftDoing = N(job.Shifting_JobDoing);
+    const shiftDone  = Math.max(0, shiftTotal - shiftDoing);
+
+    // Tổng
+    const totalJob = N(job.TotalJob);
+    const doingJob = N(job.JobDoing);
+    const doneJob  = Math.max(0, totalJob - doingJob);
+
+    // % / TEUs / Hãng
+    const productivity = (job.PercentDone != null && !isNaN(job.PercentDone))
+      ? Math.round(job.PercentDone * 100) / 100 : 0;
+    const teus = (job.TotalTeu != null ? job.TotalTeu : '—');
+    const opr  = s.OprId || '—';
+
+    // Thời gian
+    const berthDate = fmtDate(job.BerthDate || s.BerthDate);
+    const etb       = fmtDate(job.ETB || s.ETB);
+    const wkStart   = fmtDate(job.ATW || s.ATW || job.ETW || s.ETW); // Bắt đầu hoặc dự kiến
+    const etc       = fmtDate(job.ETC || s.ETC);
+
+    const berthName = berthNoToName(berths, s.BerthNo) || '—';
+
+    rows.push({
+      key: s.ShipKey,
+      ship: s.ShipName || '—',
+      berth: berthName,
+      opr, teus, productivity,
+      berthDate, etb, wkStart, etc,
+      loadTotal, loadDone, loadDoing,
+      discTotal, discDone, discDoing,
+      shiftTotal, shiftDone, shiftDoing,
+      totalJob, doneJob, doingJob
+    });
+  }
+
+  // Sort theo bến, rồi tên tàu
+  rows.sort((a,b)=> (a.berth||'').localeCompare(b.berth||'') || (a.ship||'').localeCompare(b.ship||''));
+
+  // Render TABLE (desktop)
+  if (tbody){
+    for (let r of rows){
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>'+r.berth+'</td>'+
+        '<td class="ship">'+r.ship+'</td>'+
+        '<td>'+r.opr+'</td>'+
+        '<td>'+r.teus+'</td>'+
+        '<td>'+r.productivity+'%</td>'+
+        '<td>'+r.etb+'</td>'+
+        '<td>'+r.wkStart+'</td>'+
+        '<td>'+r.etc+'</td>'+
+
+        '<td>'+r.loadTotal+'</td>'+
+        '<td>'+r.loadDone+'</td>'+
+        '<td>'+r.loadDoing+'</td>'+
+
+        '<td>'+r.discTotal+'</td>'+
+        '<td>'+r.discDone+'</td>'+
+        '<td>'+r.discDoing+'</td>'+
+
+        '<td>'+r.shiftTotal+'</td>'+
+        '<td>'+r.shiftDone+'</td>'+
+        '<td>'+r.shiftDoing+'</td>'+
+
+        '<td>'+r.totalJob+'</td>'+
+        '<td>'+r.doneJob+'</td>'+
+        '<td>'+r.doingJob+'</td>';
+
+      tr.addEventListener('click', ((key)=>()=>focusShipByKey(key))(r.key));
+      tbody.appendChild(tr);
+    }
+  }
+
+  // Render CARDS (mobile)
+  if (cards){
+    for (let r of rows){
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.innerHTML =
+        '<div class="hdr">'+r.ship+'</div>'+
+        '<div class="cols">'+
+          '<div>Bến</div><div>'+r.berth+'</div>'+
+          '<div>Hãng tàu</div><div>'+r.opr+'</div>'+
+          '<div>TEUs</div><div>'+r.teus+'</div>'+
+          '<div>Năng suất</div><div>'+r.productivity+'%</div>'+
+            '<div>Tiến độ</div><div><div class="bar"><i style="width:'+r.productivity+'%">'+r.productivity+'%</i></div></div>'+
+          '<div>Thời gian cập cầu</div><div>'+r.etb+'</div>'+
+          '<div>Bắt đầu làm hàng</div><div>'+r.wkStart+'</div>'+
+          '<div>Dự kiến xong</div><div>'+r.etc+'</div>'+
+
+          '<div>Nhập - Tổng</div><div>'+r.loadTotal+'</div>'+
+          '<div>Nhập - Đã thực hiện</div><div>'+r.loadDone+'</div>'+
+          '<div>Nhập - Còn lại</div><div>'+r.loadDoing+'</div>'+
+
+          '<div>Xuất - Tổng</div><div>'+r.discTotal+'</div>'+
+          '<div>Xuất - Đã thực hiện</div><div>'+r.discDone+'</div>'+
+          '<div>Xuất - Còn lại</div><div>'+r.discDoing+'</div>'+
+
+          '<div>Đảo chuyển - Tổng</div><div>'+r.shiftTotal+'</div>'+
+          '<div>Đảo chuyển - Đã thực hiện</div><div>'+r.shiftDone+'</div>'+
+          '<div>Đảo chuyển - Còn lại</div><div>'+r.shiftDoing+'</div>'+
+
+          '<div>Tổng - Tổng</div><div>'+r.totalJob+'</div>'+
+          '<div>Tổng - Đã thực hiện</div><div>'+r.doneJob+'</div>'+
+          '<div>Tổng - Còn lại</div><div>'+r.doingJob+'</div>'+
+        '</div>';
+
+      div.addEventListener('click', ((key)=>()=>{
+        focusShipByKey(key);
+       
+        const jobsCard = document.getElementById('jobsCard');
+        const toggleBtn = document.getElementById('toggleJobs');
+        if (jobsCard && toggleBtn){
+          jobsCard.classList.remove('open');
+          toggleBtn.classList.remove('rotate');
+        }
+      })(r.key));
+
+      cards.appendChild(div);
+    }
   }
 }
+
+
+// function buildJobsUI(ships, berths, jobData){
+//   var tbody=document.querySelector('#jobsTable tbody'); tbody.innerHTML='';
+//   var cards=document.getElementById('jobsCards'); cards.innerHTML='';
+//   var seen={}, rows=[], i;
+
+//   for(i=0;i<(ships||[]).length;i++){ var s=ships[i]; if(seen[s.ShipKey]) continue; seen[s.ShipKey]=1;
+//     var berthName=berthNoToName(berths, s.BerthNo)||'—';
+//     var prog=progressFromJobs(jobData,s.ShipKey);
+//     rows.push({key:s.ShipKey, ship:s.ShipName||'—', berth:berthName, eta:s.ETA||'—', etd:s.ETD||s.Etd||'—', prog:prog});
+//   }
+//   rows.sort(function(a,b){ return (a.berth||'').localeCompare(b.berth||'') || (b.prog-a.prog); });
+
+//   for(i=0;i<rows.length;i++){
+//     var r=rows[i];
+//     var tr=document.createElement('tr');
+//     tr.innerHTML='<td>'+r.berth+'</td><td class="ship">'+r.ship+'</td>'+
+//       '<td class="hide-sm">'+r.key+'</td><td class="hide-sm">'+r.eta+' → '+r.etd+'</td>'+
+//       '<td style="min-width:160px"><div class="bar"><i style="width:'+r.prog+'%">'+r.prog+'%</i></div></td>';
+//     tr.addEventListener('click',(function(key){ return function(){ focusShipByKey(key); }; })(r.key));
+//     tbody.appendChild(tr);
+//   }
+
+//   for(i=0;i<rows.length;i++){
+//     var rr=rows[i];
+//     var div=document.createElement('div'); div.className='card';
+//     div.innerHTML='<div class="hdr">'+rr.ship+'</div>'+
+//       '<div class="cols">'+
+//       '<div>Bến</div><div>'+rr.berth+'</div>'+
+//       '<div>ShipKey</div><div>'+rr.key+'</div>'+
+//       '<div>ETA</div><div>'+rr.eta+'</div>'+
+//       '<div>ETD</div><div>'+rr.etd+'</div>'+
+//       '<div>Tiến độ</div><div><div class="bar"><i style="width:'+rr.prog+'%">'+rr.prog+'%</i></div></div>'+
+//       '</div>';
+//     div.addEventListener('click',(function(key){ return function(){ focusShipByKey(key); jobsCard.classList.remove('open'); toggleBtn.classList.remove('rotate'); }; })(rr.key));
+//     cards.appendChild(div);
+//   }
+// }
 
 function focusShipByKey(shipKey){
   var g=document.querySelector('#layer-ships g.ship[data-shipkey="'+shipKey+'"]');
